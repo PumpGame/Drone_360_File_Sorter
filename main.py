@@ -143,29 +143,43 @@ class FileSorterApp(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
+            moved_count = 0
+            skipped_files = []
             for date, files in self.files_to_sort.items():
                 for file in files:
                     source_path = os.path.join(self.folder_path, file)
+
+                    if not os.path.exists(source_path):
+                        skipped_files.append(file)
+                        continue
+
                     file_lower = file.lower()
 
                     # Determine the destination folder (kept compatible with original behavior)
                     if file_lower.endswith(".srt"):
                         destination_folder = os.path.join(self.folder_path, date, "Video")
-                        os.makedirs(destination_folder, exist_ok=True)
                     elif file_lower.endswith(".db"):
                         destination_folder = os.path.join(self.folder_path, date)
-                        os.makedirs(destination_folder, exist_ok=True)
                     else:
                         destination_folder = os.path.join(self.folder_path, date)
                         if self.enable_type_sorting_checkbox.isChecked():
                             file_type = self.get_file_type(file)
                             destination_folder = os.path.join(destination_folder, file_type)
-                            os.makedirs(destination_folder, exist_ok=True)
+
+                    os.makedirs(destination_folder, exist_ok=True)
 
                     destination_path = os.path.join(destination_folder, file)
                     os.rename(source_path, destination_path)
+                    moved_count += 1
 
-            QMessageBox.information(self, "Success", "Files have been moved successfully.")
+            if skipped_files:
+                QMessageBox.warning(
+                    self,
+                    "Completed With Warnings",
+                    f"Moved {moved_count} files. Skipped {len(skipped_files)} missing files."
+                )
+            else:
+                QMessageBox.information(self, "Success", f"Moved {moved_count} files successfully.")
             self.list_files()
 
     def get_file_type(self, file_name):
