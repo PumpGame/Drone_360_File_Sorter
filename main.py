@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle
 )
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
 
 # NOTE: PIL imports were in the original file, but not used.
@@ -17,10 +17,16 @@ from datetime import datetime
 # from PIL.ExifTags import TAGS
 
 
+def resource_path(rel: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
+
 class FileSorterApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("File Sorter by Modified Date")
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
 
         self.folder_path = ""
         self.files_to_sort = {}

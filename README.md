@@ -40,6 +40,12 @@ Uruchamianie:
 .venv/bin/python main.py
 ```
 
+## Build portable EXE
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_release.ps1
+```
+
 ## Git + GitHub
 
 Lokalne repo jest juz zainicjalizowane. Aby podpiac GitHub:
