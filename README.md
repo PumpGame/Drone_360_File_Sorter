@@ -27,6 +27,19 @@ albo:
 run.bat
 ```
 
+## Setup na macOS
+
+```bash
+chmod +x setup_mac.sh
+./setup_mac.sh
+```
+
+Uruchamianie:
+
+```bash
+.venv/bin/python main.py
+```
+
 ## Git + GitHub
 
 Lokalne repo jest juz zainicjalizowane. Aby podpiac GitHub:
