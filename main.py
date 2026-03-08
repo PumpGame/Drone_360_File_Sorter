@@ -194,13 +194,16 @@ class FileSorterApp(QMainWindow):
 
         if reply == QMessageBox.Yes:
             moved_count = 0
-            skipped_files = []
+            skipped_count = 0
+            errors: list[str] = []
+            by_folder: dict[str, int] = {}
             for date, files in self.files_to_sort.items():
                 for file in files:
                     source_path = os.path.join(self.folder_path, file)
 
                     if not os.path.exists(source_path):
-                        skipped_files.append(file)
+                        skipped_count += 1
+                        errors.append(f"{file} -> file not found")
                         continue
 
                     destination_folder = self.get_destination_folder(date, file)
@@ -208,22 +211,45 @@ class FileSorterApp(QMainWindow):
                     os.makedirs(destination_folder, exist_ok=True)
 
                     destination_path = os.path.join(destination_folder, file)
-                    os.rename(source_path, destination_path)
-                    moved_count += 1
+                    try:
+                        os.rename(source_path, destination_path)
+                        moved_count += 1
+                        by_folder[destination_folder] = by_folder.get(destination_folder, 0) + 1
+                    except OSError as exc:
+                        skipped_count += 1
+                        errors.append(f"{file} -> {exc}")
 
-            if skipped_files:
-                QMessageBox.warning(
-                    self,
-                    "Completed With Warnings",
-                    f"Moved {moved_count} files. Skipped {len(skipped_files)} missing files."
-                )
-                self.set_status(
-                    f"Moved {moved_count}, skipped {len(skipped_files)}",
-                    5000
-                )
+            errors_count = len(errors)
+            summary_text = (
+                f"Moved: {moved_count}\n"
+                f"Skipped: {skipped_count}\n"
+                f"Errors: {errors_count}\n"
+                f"Dest folders: {len(by_folder)}"
+            )
+
+            by_folder_lines = [
+                f"{folder} ({count})"
+                for folder, count in sorted(by_folder.items(), key=lambda kv: kv[1], reverse=True)
+            ]
+            details_parts = ["By folder:"]
+            details_parts.extend(by_folder_lines or ["(none)"])
+            if errors:
+                details_parts.append("")
+                details_parts.append("Errors:")
+                details_parts.extend(errors)
+            detailed_text = "\n".join(details_parts)
+
+            summary_box = QMessageBox(self)
+            summary_box.setWindowTitle("Move summary")
+            summary_box.setText(summary_text)
+            summary_box.setDetailedText(detailed_text)
+            if errors_count > 0:
+                summary_box.setIcon(QMessageBox.Icon.Warning)
             else:
-                QMessageBox.information(self, "Success", f"Moved {moved_count} files successfully.")
-                self.set_status(f"Moved {moved_count} files", 5000)
+                summary_box.setIcon(QMessageBox.Icon.Information)
+            summary_box.exec()
+
+            self.set_status(f"Moved {moved_count} files, errors {errors_count}", 5000)
             self.list_files()
 
     # pano rule
