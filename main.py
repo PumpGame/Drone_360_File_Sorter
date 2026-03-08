@@ -1,12 +1,14 @@
 import sys
 import os
 import subprocess
+import json
+import shutil
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QMessageBox, QWidget, QListWidgetItem, QCheckBox, QGroupBox, QFrame, QStatusBar
 )
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPalette
 from datetime import datetime
 
 # NOTE: PIL imports were in the original file, but not used.
@@ -112,6 +114,13 @@ class FileSorterApp(QMainWindow):
         self.confirm_button.setEnabled(False)
         self.confirm_button.setProperty("class", "primary")
         self.confirm_button.setDefault(True)
+
+        self.undo_button = QPushButton("Undo Last Run")
+        self.undo_button.clicked.connect(self.undo_last_run)
+        self.undo_button.setProperty("class", "secondary")
+        self.undo_button.setEnabled(False)
+        action_layout.addWidget(self.undo_button)
+
         action_layout.addWidget(self.confirm_button)
 
         self.setStatusBar(QStatusBar(self))
@@ -126,6 +135,7 @@ class FileSorterApp(QMainWindow):
             self.folder_label.setText(f"Selected Folder: {folder_path}")
             self.set_status("Folder selected")
             self.list_files()
+            self.update_undo_button_state()
 
     def list_files(self):
         self.file_list.clear()
@@ -148,6 +158,7 @@ class FileSorterApp(QMainWindow):
 
         self.update_preview()
         self.confirm_button.setEnabled(True)
+        self.update_undo_button_state()
         file_count = sum(len(files) for files in self.files_to_sort.values())
         self.set_status(f"Files found: {file_count}")
 
@@ -170,13 +181,11 @@ class FileSorterApp(QMainWindow):
             header_font.setBold(True)
             header_font.setPointSize(header_font.pointSize() + 1)
             folder_item.setFont(header_font)
-            folder_item.setForeground(QColor("#1f4f46"))
             self.file_list.addItem(folder_item)
 
             for file in files:
                 file_item = QListWidgetItem(f"  └ {file}")
                 file_item.setData(Qt.ItemDataRole.UserRole, "file")
-                file_item.setForeground(QColor("#1e1e1e"))
                 self.file_list.addItem(file_item)
         total_items = self.file_list.count()
         self.set_status(f"Preview ready: {total_items} rows")
@@ -193,38 +202,46 @@ class FileSorterApp(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
+            self.set_status("Moving...", 2000)
             moved_count = 0
             skipped_count = 0
             errors: list[str] = []
             by_folder: dict[str, int] = {}
+            moved_pairs: list[dict[str, str]] = []
             for date, files in self.files_to_sort.items():
                 for file in files:
-                    source_path = os.path.join(self.folder_path, file)
+                    source_path = os.path.abspath(os.path.join(self.folder_path, file))
 
                     if not os.path.exists(source_path):
                         skipped_count += 1
                         errors.append(f"{file} -> file not found")
                         continue
 
-                    destination_folder = self.get_destination_folder(date, file)
+                    destination_folder = os.path.abspath(self.get_destination_folder(date, file))
 
                     os.makedirs(destination_folder, exist_ok=True)
 
                     destination_path = os.path.join(destination_folder, file)
                     try:
-                        os.rename(source_path, destination_path)
+                        shutil.move(source_path, destination_path)
                         moved_count += 1
                         by_folder[destination_folder] = by_folder.get(destination_folder, 0) + 1
+                        moved_pairs.append({"src": source_path, "dst": os.path.abspath(destination_path)})
                     except OSError as exc:
                         skipped_count += 1
                         errors.append(f"{file} -> {exc}")
+
+            if moved_pairs:
+                self.save_last_run_log(moved_pairs)
+            self.update_undo_button_state()
 
             errors_count = len(errors)
             summary_text = (
                 f"Moved: {moved_count}\n"
                 f"Skipped: {skipped_count}\n"
                 f"Errors: {errors_count}\n"
-                f"Dest folders: {len(by_folder)}"
+                f"Dest folders: {len(by_folder)}\n"
+                f"Undo is available: click 'Undo Last Run'."
             )
 
             by_folder_lines = [
@@ -251,6 +268,101 @@ class FileSorterApp(QMainWindow):
 
             self.set_status(f"Moved {moved_count} files, errors {errors_count}", 5000)
             self.list_files()
+
+    def undo_last_run(self):
+        log_data = self.load_last_run_log()
+        if not log_data or not log_data.get("moves"):
+            QMessageBox.information(self, "Undo", "No undo data found for this folder.")
+            self.update_undo_button_state()
+            return
+
+        timestamp = log_data.get("timestamp", "unknown time")
+        reply = QMessageBox.question(
+            self,
+            "Confirm Undo",
+            f"Undo last move from {timestamp}? This will move files back to their original locations.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.set_status("Undo in progress...", 2000)
+
+        moves = log_data.get("moves", [])
+        moved_back = 0
+        missing_count = 0
+        conflicts_count = 0
+        errors: list[str] = []
+        conflict_details: list[str] = []
+        remaining_moves: list[dict[str, str]] = []
+
+        for move in reversed(moves):
+            src = os.path.abspath(move.get("src", ""))
+            dst = os.path.abspath(move.get("dst", ""))
+
+            if not src or not dst:
+                errors.append(f"{dst or '(unknown)'} -> invalid log entry")
+                remaining_moves.append(move)
+                continue
+
+            if not os.path.exists(dst):
+                missing_count += 1
+                errors.append(f"{dst} -> missing")
+                remaining_moves.append(move)
+                continue
+
+            os.makedirs(os.path.dirname(src), exist_ok=True)
+            target_src = src
+            if os.path.exists(src):
+                conflicts_count += 1
+                target_src = self.resolve_undo_conflict_path(src)
+                conflict_details.append(f"{dst} -> {target_src}")
+
+            try:
+                shutil.move(dst, target_src)
+                moved_back += 1
+            except OSError as exc:
+                errors.append(f"{dst} -> {exc}")
+                remaining_moves.append(move)
+
+        errors_count = len(errors)
+
+        summary_text = (
+            f"Moved back: {moved_back}\n"
+            f"Missing: {missing_count}\n"
+            f"Conflicts renamed: {conflicts_count}\n"
+            f"Errors: {errors_count}"
+        )
+
+        details_parts = ["Conflicts renamed:"]
+        details_parts.extend(conflict_details or ["(none)"])
+        details_parts.append("")
+        details_parts.append("Missing/Errors:")
+        details_parts.extend(errors or ["(none)"])
+
+        summary_box = QMessageBox(self)
+        summary_box.setWindowTitle("Move summary")
+        summary_box.setText(summary_text)
+        summary_box.setDetailedText("\n".join(details_parts))
+        if errors_count > 0 or missing_count > 0:
+            summary_box.setIcon(QMessageBox.Icon.Warning)
+        else:
+            summary_box.setIcon(QMessageBox.Icon.Information)
+        summary_box.exec()
+
+        if remaining_moves:
+            self.save_last_run_log(remaining_moves)
+        else:
+            log_path = self.get_undo_log_path()
+            if os.path.exists(log_path):
+                os.remove(log_path)
+
+        self.update_undo_button_state()
+        self.set_status(
+            f"Undo finished: moved back {moved_back}, errors {errors_count + missing_count}",
+            5000
+        )
+        self.list_files()
 
     # pano rule
     def has_pano_tag(self, file_path: str) -> bool:
@@ -339,6 +451,57 @@ class FileSorterApp(QMainWindow):
             return os.path.join(base, self.get_file_type(filename))
         return base
 
+    def get_undo_log_path(self) -> str:
+        if not self.folder_path:
+            return ""
+        return os.path.join(self.folder_path, "_sorter_undo_last.json")
+
+    def load_last_run_log(self) -> dict:
+        log_path = self.get_undo_log_path()
+        if not log_path or not os.path.exists(log_path):
+            return {}
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("moves"), list):
+                return data
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return {}
+
+    def save_last_run_log(self, moved_pairs: list[dict[str, str]]):
+        log_path = self.get_undo_log_path()
+        if not log_path:
+            return
+        payload = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "root": os.path.abspath(self.folder_path),
+            "moves": moved_pairs,
+        }
+        temp_path = f"{log_path}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(temp_path, log_path)
+        except OSError:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def update_undo_button_state(self):
+        log_data = self.load_last_run_log()
+        has_moves = bool(log_data.get("moves"))
+        self.undo_button.setEnabled(has_moves)
+
+    def resolve_undo_conflict_path(self, src_path: str) -> str:
+        base_dir = os.path.dirname(src_path)
+        name, ext = os.path.splitext(os.path.basename(src_path))
+        index = 1
+        while True:
+            candidate = os.path.join(base_dir, f"{name}_UNDO_{index:03d}{ext}")
+            if not os.path.exists(candidate):
+                return candidate
+            index += 1
+
     def get_file_type(self, file_name):
         name = file_name.lower()
 
@@ -368,72 +531,65 @@ class FileSorterApp(QMainWindow):
         self.statusBar().showMessage(text, timeout_ms)
 
     def apply_styles(self):
+        app = QApplication.instance()
+        app.setStyle("Fusion")
+
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(230, 230, 230))
+        palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 45))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(35, 35, 35))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(240, 240, 240))
+        palette.setColor(QPalette.ColorRole.Text, QColor(230, 230, 230))
+        palette.setColor(QPalette.ColorRole.Button, QColor(60, 60, 60))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(235, 235, 235))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 255, 255))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(62, 130, 247))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+        app.setPalette(palette)
+
         qss = """
-        QWidget {
-            background-color: #f6f7f9;
-            color: #1f2328;
-            font-size: 13px;
-        }
         QGroupBox {
-            border: 1px solid #d8dee4;
+            border: 1px solid #4a4a4a;
             border-radius: 8px;
             margin-top: 10px;
             padding: 8px;
-            background-color: #fbfcfe;
             font-weight: 600;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
             left: 10px;
             padding: 0 4px;
-            color: #374151;
         }
         QLabel#typeSortingDesc {
-            color: #5f6b7a;
+            color: #b8b8b8;
             font-size: 11px;
         }
         QListWidget {
-            background-color: #ffffff;
-            border: 1px solid #d8dee4;
+            border: 1px solid #4a4a4a;
             border-radius: 6px;
             padding: 6px;
         }
-        QListWidget:focus {
-            border: 1px solid #7aa2ff;
-        }
         QPushButton {
-            background-color: #eef1f5;
-            border: 1px solid #d0d7de;
+            border: 1px solid #5a5a5a;
             border-radius: 6px;
             padding: 6px 12px;
         }
-        QPushButton:hover {
-            background-color: #e5eaf1;
-        }
-        QPushButton:disabled {
-            background-color: #f1f3f6;
-            color: #9aa4b2;
-            border-color: #e1e5ea;
-        }
         QPushButton[class="primary"] {
-            background-color: #1f6feb;
-            color: white;
-            border: 1px solid #1b63d1;
+            background-color: #2f81f7;
+            color: #ffffff;
+            border: 1px solid #2b74de;
             font-weight: 600;
         }
         QPushButton[class="primary"]:hover {
-            background-color: #1a61cf;
-        }
-        QFrame {
-            color: #e3e8ef;
+            background-color: #246fe0;
         }
         QStatusBar {
-            background-color: #f6f7f9;
-            color: #4b5563;
-            border-top: 1px solid #dde3ea;
+            border-top: 1px solid #4a4a4a;
         }
         """
-        QApplication.instance().setStyleSheet(qss)
+        app.setStyleSheet(qss)
 
 
 if __name__ == "__main__":
