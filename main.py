@@ -1,5 +1,6 @@
 import sys
 import os
+import subprocess
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -21,6 +22,7 @@ class FileSorterApp(QMainWindow):
 
         self.folder_path = ""
         self.files_to_sort = {}
+        self._keywords_cache: dict[str, list[str]] = {}
 
         # Main layout
         self.central_widget = QWidget()
@@ -120,6 +122,7 @@ class FileSorterApp(QMainWindow):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder_path:
             self.folder_path = folder_path
+            self._keywords_cache.clear()
             self.folder_label.setText(f"Selected Folder: {folder_path}")
             self.set_status("Folder selected")
             self.list_files()
@@ -132,6 +135,7 @@ class FileSorterApp(QMainWindow):
             return
 
         self.files_to_sort = {}
+        self._keywords_cache.clear()
 
         for file_name in os.listdir(self.folder_path):
             full_path = os.path.join(self.folder_path, file_name)
@@ -153,19 +157,7 @@ class FileSorterApp(QMainWindow):
         organized_files = {}
         for date, files in self.files_to_sort.items():
             for file in files:
-                destination_folder = os.path.join(self.folder_path, date)
-
-                if self.enable_type_sorting_checkbox.isChecked():
-                    file_lower = file.lower()
-                    file_type = self.get_file_type(file)
-
-                    # Special cases from original logic
-                    if file_lower.endswith(".srt"):
-                        destination_folder = os.path.join(self.folder_path, date, "Video")
-                    elif file_lower.endswith(".db"):
-                        destination_folder = os.path.join(self.folder_path, date)
-                    else:
-                        destination_folder = os.path.join(destination_folder, file_type)
+                destination_folder = self.get_destination_folder(date, file)
 
                 if destination_folder not in organized_files:
                     organized_files[destination_folder] = []
@@ -211,18 +203,7 @@ class FileSorterApp(QMainWindow):
                         skipped_files.append(file)
                         continue
 
-                    file_lower = file.lower()
-
-                    # Determine the destination folder (kept compatible with original behavior)
-                    if file_lower.endswith(".srt"):
-                        destination_folder = os.path.join(self.folder_path, date, "Video")
-                    elif file_lower.endswith(".db"):
-                        destination_folder = os.path.join(self.folder_path, date)
-                    else:
-                        destination_folder = os.path.join(self.folder_path, date)
-                        if self.enable_type_sorting_checkbox.isChecked():
-                            file_type = self.get_file_type(file)
-                            destination_folder = os.path.join(destination_folder, file_type)
+                    destination_folder = self.get_destination_folder(date, file)
 
                     os.makedirs(destination_folder, exist_ok=True)
 
@@ -244,6 +225,93 @@ class FileSorterApp(QMainWindow):
                 QMessageBox.information(self, "Success", f"Moved {moved_count} files successfully.")
                 self.set_status(f"Moved {moved_count} files", 5000)
             self.list_files()
+
+    # pano rule
+    def has_pano_tag(self, file_path: str) -> bool:
+        file_name_lower = os.path.basename(file_path).lower()
+        if "pano" in file_name_lower:
+            return True
+
+        if not file_name_lower.endswith((".jpg", ".jpeg")):
+            return False
+
+        keywords = self.get_windows_keywords(file_path)
+        if "pano" in keywords:
+            return True
+
+        try:
+            with open(file_path, "rb") as f:
+                raw = f.read(1024 * 1024)
+            text = raw.decode("utf-8", errors="ignore").lower()
+        except OSError:
+            return False
+
+        if ">pano<" in text:
+            return True
+        if "dc:subject" in text and "pano" in text:
+            return True
+        if "xmp:subject" in text and "pano" in text:
+            return True
+        return False
+
+    def get_windows_keywords(self, file_path: str) -> list[str]:
+        normalized_path = os.path.normpath(file_path)
+        if normalized_path in self._keywords_cache:
+            return self._keywords_cache[normalized_path]
+
+        dir_path = os.path.dirname(normalized_path)
+        file_name = os.path.basename(normalized_path)
+        keywords: list[str] = []
+        ps_script = (
+            "& { param($dir,$name) "
+            "$shell = New-Object -ComObject Shell.Application; "
+            "$folder = $shell.NameSpace($dir); "
+            "if ($null -eq $folder) { return }; "
+            "$item = $folder.ParseName($name); "
+            "if ($null -eq $item) { return }; "
+            "$kw = $item.ExtendedProperty('System.Keywords'); "
+            "if ($null -eq $kw) { return }; "
+            "if ($kw -is [System.Array]) { [Console]::Out.Write(($kw -join ';')) } "
+            "else { [Console]::Out.Write([string]$kw) } "
+            "}"
+        )
+
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script, dir_path, file_name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout:
+                keywords = [
+                    part.strip().lower()
+                    for part in result.stdout.split(";")
+                    if part.strip()
+                ]
+        except Exception:
+            keywords = []
+
+        self._keywords_cache[normalized_path] = keywords
+        return keywords
+
+    # pano rule
+    def get_destination_folder(self, date: str, filename: str) -> str:
+        base = os.path.join(self.folder_path, date)
+        file_lower = filename.lower()
+
+        if file_lower.endswith(".db"):
+            return base
+        if file_lower.endswith(".srt"):
+            return os.path.join(base, "Video")
+
+        source_path = os.path.join(self.folder_path, filename)
+        if self.has_pano_tag(source_path):
+            base = os.path.join(base, "Pano")
+
+        if self.enable_type_sorting_checkbox.isChecked():
+            return os.path.join(base, self.get_file_type(filename))
+        return base
 
     def get_file_type(self, file_name):
         name = file_name.lower()
