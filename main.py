@@ -6,9 +6,9 @@ import shutil
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QListWidget, QMessageBox, QWidget, QListWidgetItem, QCheckBox, QGroupBox, QFrame, QStatusBar
+    QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle
 )
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtGui import QColor, QPalette
 from datetime import datetime
 
 # NOTE: PIL imports were in the original file, but not used.
@@ -95,8 +95,11 @@ class FileSorterApp(QMainWindow):
         preview_group.setLayout(preview_layout)
         layout.addWidget(preview_group)
 
-        self.file_list = QListWidget()
-        preview_layout.addWidget(self.file_list)
+        self.destination_tree = QTreeWidget()
+        self.destination_tree.setHeaderLabel("Destination structure")
+        self.destination_tree.setRootIsDecorated(True)
+        self.destination_tree.setAlternatingRowColors(True)
+        preview_layout.addWidget(self.destination_tree)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -138,7 +141,7 @@ class FileSorterApp(QMainWindow):
             self.update_undo_button_state()
 
     def list_files(self):
-        self.file_list.clear()
+        self.destination_tree.clear()
         if not os.path.isdir(self.folder_path):
             QMessageBox.warning(self, "Error", "The selected path is not a valid folder.")
             self.set_status("Invalid folder selected")
@@ -163,7 +166,7 @@ class FileSorterApp(QMainWindow):
         self.set_status(f"Files found: {file_count}")
 
     def update_preview(self):
-        self.file_list.clear()
+        self.destination_tree.clear()
 
         organized_files = {}
         for date, files in self.files_to_sort.items():
@@ -174,21 +177,58 @@ class FileSorterApp(QMainWindow):
                     organized_files[destination_folder] = []
                 organized_files[destination_folder].append(file)
 
-        for folder, files in organized_files.items():
-            folder_item = QListWidgetItem(f"Folder: {folder} ({len(files)})")
-            folder_item.setData(Qt.ItemDataRole.UserRole, "header")
-            header_font = QFont(self.file_list.font())
-            header_font.setBold(True)
-            header_font.setPointSize(header_font.pointSize() + 1)
-            folder_item.setFont(header_font)
-            self.file_list.addItem(folder_item)
+        self.populate_destination_tree(organized_files)
+        total_files = sum(len(files) for files in organized_files.values())
+        self.set_status(f"Preview ready: {total_files} files")
 
-            for file in files:
-                file_item = QListWidgetItem(f"  └ {file}")
-                file_item.setData(Qt.ItemDataRole.UserRole, "file")
-                self.file_list.addItem(file_item)
-        total_items = self.file_list.count()
-        self.set_status(f"Preview ready: {total_items} rows")
+    def populate_destination_tree(self, organized_files: dict[str, list[str]]) -> None:
+        self.destination_tree.clear()
+        if not self.folder_path:
+            return
+
+        folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+        root_name = os.path.basename(os.path.normpath(self.folder_path)) or "Destination"
+        total_files = sum(len(files) for files in organized_files.values())
+        root_item = QTreeWidgetItem([f"{root_name} ({total_files})"])
+        root_item.setIcon(0, folder_icon)
+        self.destination_tree.addTopLevelItem(root_item)
+
+        node_cache: dict[tuple[str, ...], QTreeWidgetItem] = {}
+        counts: dict[tuple[str, ...], int] = {}
+
+        for destination_folder, files in organized_files.items():
+            rel_path = os.path.relpath(destination_folder, self.folder_path)
+            if rel_path in (".", ""):
+                parts: list[str] = []
+            else:
+                parts = [p for p in rel_path.split(os.sep) if p and p != "."]
+
+            for depth in range(1, len(parts) + 1):
+                key = tuple(parts[:depth])
+                counts[key] = counts.get(key, 0) + len(files)
+
+            parent_item = root_item
+            for depth, part in enumerate(parts, start=1):
+                key = tuple(parts[:depth])
+                if key not in node_cache:
+                    folder_item = QTreeWidgetItem([part])
+                    folder_item.setIcon(0, folder_icon)
+                    node_cache[key] = folder_item
+                    parent_item.addChild(folder_item)
+                parent_item = node_cache[key]
+
+            for file_name in sorted(files):
+                file_item = QTreeWidgetItem([file_name])
+                file_item.setIcon(0, file_icon)
+                parent_item.addChild(file_item)
+
+        for key, item in node_cache.items():
+            item.setText(0, f"{key[-1]} ({counts.get(key, 0)})")
+
+        root_item.setExpanded(True)
+        self.destination_tree.expandToDepth(1)
 
     def confirm_and_move_files(self):
         if not self.files_to_sort:
@@ -567,10 +607,13 @@ class FileSorterApp(QMainWindow):
             color: #b8b8b8;
             font-size: 11px;
         }
-        QListWidget {
+        QTreeWidget {
             border: 1px solid #4a4a4a;
             border-radius: 6px;
             padding: 6px;
+        }
+        QTreeWidget::item {
+            padding: 2px 0;
         }
         QPushButton {
             border: 1px solid #5a5a5a;
