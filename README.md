@@ -1,10 +1,10 @@
 # Drone 360 File Sorter
 
-Prosta aplikacja desktopowa (PySide2), ktora porzadkuje pliki wedlug daty modyfikacji.
+Prosta aplikacja desktopowa (PySide6), ktora porzadkuje pliki wedlug daty modyfikacji.
 
 ## Wymagania
 
-- Python 3.10
+- Python 3.10-3.13
 
 ## Szybki start (Windows / PowerShell)
 
