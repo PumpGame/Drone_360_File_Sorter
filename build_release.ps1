@@ -33,13 +33,22 @@ foreach ($dir in @("build", "dist")) {
     }
 }
 
+$specPath = Join-Path $repoRoot "Drone360FileSorter.spec"
+if (Test-Path $specPath) {
+    Write-Host "Removing old spec file..."
+    Remove-Item -Path $specPath -Force
+}
+
 $iconPath = "C:\Users\klaud\Repos\Drone_360_File_Sorter\icon.ico"
 if (-not (Test-Path $iconPath)) {
     throw "Icon not found: $iconPath"
 }
 
 Write-Host "Building onefile EXE with PyInstaller..."
-& $PY -m PyInstaller --onefile --windowed --name "Drone360FileSorter" --icon $iconPath --add-data "$iconPath;." main.py
+$mainPyPath = Join-Path $repoRoot "main.py"
+$mainHash = Get-FileHash -Path $mainPyPath -Algorithm SHA256
+Write-Host "main.py SHA256: $($mainHash.Hash)"
+& $PY -m PyInstaller --clean --onefile --windowed --name "Drone360FileSorter" --icon $iconPath --add-data "$iconPath;." main.py
 
 $releaseDir = Join-Path $repoRoot "release"
 if (-not (Test-Path $releaseDir)) {

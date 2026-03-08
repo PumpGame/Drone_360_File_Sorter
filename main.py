@@ -450,28 +450,43 @@ class FileSorterApp(QMainWindow):
 
         dir_path = os.path.dirname(normalized_path)
         file_name = os.path.basename(normalized_path)
+        safe_dir = dir_path.replace("'", "''")
+        safe_name = file_name.replace("'", "''")
         keywords: list[str] = []
+        powershell_exe = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        if not os.path.exists(powershell_exe):
+            powershell_exe = "powershell"
         ps_script = (
-            "& { param($dir,$name) "
             "$shell = New-Object -ComObject Shell.Application; "
-            "$folder = $shell.NameSpace($dir); "
+            "$folder = $shell.NameSpace('" + safe_dir + "'); "
             "if ($null -eq $folder) { return }; "
-            "$item = $folder.ParseName($name); "
+            "$item = $folder.ParseName('" + safe_name + "'); "
             "if ($null -eq $item) { return }; "
             "$kw = $item.ExtendedProperty('System.Keywords'); "
             "if ($null -eq $kw) { return }; "
             "if ($kw -is [System.Array]) { [Console]::Out.Write(($kw -join ';')) } "
             "else { [Console]::Out.Write([string]$kw) } "
-            "}"
         )
 
         try:
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script, dir_path, file_name],
+                [
+                    powershell_exe,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    ps_script,
+                ],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=15,
             )
+            debug_enabled = os.environ.get("DRONESORT_DEBUG") == "1"
+            stderr_text = (result.stderr or "").strip()
+            if debug_enabled and (result.returncode != 0 or stderr_text):
+                self.statusBar().showMessage(f"Pano keywords failed: {stderr_text[:120]}", 8000)
+
             if result.returncode == 0 and result.stdout:
                 keywords = [
                     part.strip().lower()
@@ -480,6 +495,24 @@ class FileSorterApp(QMainWindow):
                 ]
         except Exception:
             keywords = []
+
+        if not keywords and file_name.lower().endswith((".jpg", ".jpeg")):
+            # Fallback for some files that keep pano-like metadata as UTF-16LE fragments.
+            utf16_token = "pano".encode("utf-16le")
+            try:
+                with open(normalized_path, "rb") as f:
+                    while True:
+                        chunk = f.read(1024 * 256)
+                        if not chunk:
+                            break
+                        if utf16_token in chunk:
+                            keywords = ["pano"]
+                            break
+            except OSError:
+                pass
+
+        if os.environ.get("DRONESORT_DEBUG") == "1" and not keywords:
+            self.statusBar().showMessage("Pano keywords empty", 3000)
 
         self._keywords_cache[normalized_path] = keywords
         return keywords
@@ -494,12 +527,11 @@ class FileSorterApp(QMainWindow):
         if file_lower.endswith(".srt"):
             return os.path.join(base, "Video")
 
-        source_path = os.path.join(self.folder_path, filename)
-        is_pano = self.has_pano_tag(source_path)
-        if is_pano:
-            return os.path.join(base, "Pano")
-
         if self.enable_type_sorting_checkbox.isChecked():
+            source_path = os.path.join(self.folder_path, filename)
+            is_pano = self.has_pano_tag(source_path)
+            if is_pano:
+                return os.path.join(base, "Pano")
             return os.path.join(base, self.get_file_type(filename))
         return base
 

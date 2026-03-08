@@ -11,6 +11,8 @@ __pycache__/
 .Python
 build/
 dist/
+release/
+*.spec
 *.egg-info/
 .eggs/
 
