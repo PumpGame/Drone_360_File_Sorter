@@ -1,10 +1,10 @@
 import sys
 import os
-from PySide2.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QMessageBox, QWidget, QListWidgetItem, QCheckBox
 )
-from PySide2.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor
 from datetime import datetime
 
 # NOTE: PIL imports were in the original file, but not used.
@@ -208,4 +208,4 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = FileSorterApp()
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
