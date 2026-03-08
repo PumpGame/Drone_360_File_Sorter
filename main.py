@@ -66,6 +66,7 @@ class FileSorterApp(QMainWindow):
             ".mp4", ".mov",
             ".insv",  # Insta360 video
             ".insp",  # Insta360 photo container
+            ".lrv",   # Insta360 low-res preview video
             ".srt",
             ".db",
         ]
@@ -247,12 +248,16 @@ class FileSorterApp(QMainWindow):
     def get_file_type(self, file_name):
         name = file_name.lower()
 
+        # Insta360 recording-related files
+        if name.endswith((".insv", ".insp", ".lrv")):
+            return "Insta360"
+
         # Photos / stills
-        if name.endswith((".jpg", ".jpeg", ".png", ".insp")):
+        if name.endswith((".jpg", ".jpeg", ".png")):
             return "Jpg"
 
         # Video
-        if name.endswith((".mp4", ".mov", ".insv", ".srt")):
+        if name.endswith((".mp4", ".mov", ".srt")):
             return "Video"
 
         # Raw
