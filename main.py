@@ -444,8 +444,9 @@ class FileSorterApp(QMainWindow):
             return os.path.join(base, "Video")
 
         source_path = os.path.join(self.folder_path, filename)
-        if self.has_pano_tag(source_path):
-            base = os.path.join(base, "Pano")
+        is_pano = self.has_pano_tag(source_path)
+        if is_pano:
+            return os.path.join(base, "Pano")
 
         if self.enable_type_sorting_checkbox.isChecked():
             return os.path.join(base, self.get_file_type(filename))
