@@ -1,10 +1,11 @@
 import sys
 import os
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QVBoxLayout, QPushButton, QLabel,
-    QListWidget, QMessageBox, QWidget, QListWidgetItem, QCheckBox
+    QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QListWidget, QMessageBox, QWidget, QListWidgetItem, QCheckBox, QGroupBox, QFrame, QStatusBar
 )
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QColor, QFont
 from datetime import datetime
 
 # NOTE: PIL imports were in the original file, but not used.
@@ -18,26 +19,45 @@ class FileSorterApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("File Sorter by Modified Date")
 
-        # Layout and widgets
+        self.folder_path = ""
+        self.files_to_sort = {}
+
+        # Main layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         layout = QVBoxLayout()
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
         self.central_widget.setLayout(layout)
 
+        # Source section
+        source_group = QGroupBox("Source")
+        source_layout = QVBoxLayout()
+        source_layout.setContentsMargins(10, 10, 10, 10)
+        source_layout.setSpacing(8)
+        source_group.setLayout(source_layout)
+        layout.addWidget(source_group)
+
         self.folder_label = QLabel("Selected Folder: None")
-        layout.addWidget(self.folder_label)
+        source_layout.addWidget(self.folder_label)
 
         self.choose_folder_button = QPushButton("Choose Folder")
         self.choose_folder_button.clicked.connect(self.choose_folder)
-        layout.addWidget(self.choose_folder_button)
+        self.choose_folder_button.setProperty("class", "secondary")
+        source_layout.addWidget(self.choose_folder_button)
 
-        self.file_list = QListWidget()
-        layout.addWidget(self.file_list)
+        # Options section
+        options_group = QGroupBox("Options")
+        options_layout = QVBoxLayout()
+        options_layout.setContentsMargins(10, 10, 10, 10)
+        options_layout.setSpacing(8)
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
 
         # -------- File Type Sorting checkbox + description --------
         self.enable_type_sorting_checkbox = QCheckBox("Enable File Type Sorting")
         self.enable_type_sorting_checkbox.stateChanged.connect(self.update_preview)
-        layout.addWidget(self.enable_type_sorting_checkbox)
+        options_layout.addWidget(self.enable_type_sorting_checkbox)
 
         # Extensions that this option will sort into subfolders
         self.type_sorting_formats = [
@@ -58,29 +78,56 @@ class FileSorterApp(QMainWindow):
 
         # Small label under the checkbox (always visible)
         self.type_sorting_desc = QLabel(f"Sortuje po typie pliku: {formats_txt}")
-        self.type_sorting_desc.setStyleSheet("color: #666666; font-size: 11px;")
-        layout.addWidget(self.type_sorting_desc)
+        self.type_sorting_desc.setObjectName("typeSortingDesc")
+        options_layout.addWidget(self.type_sorting_desc)
         # --------------------------------------------------------
+
+        # Preview & Actions section
+        preview_group = QGroupBox("Preview & Actions")
+        preview_layout = QVBoxLayout()
+        preview_layout.setContentsMargins(10, 10, 10, 10)
+        preview_layout.setSpacing(8)
+        preview_group.setLayout(preview_layout)
+        layout.addWidget(preview_group)
+
+        self.file_list = QListWidget()
+        preview_layout.addWidget(self.file_list)
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        preview_layout.addWidget(separator)
+
+        action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        action_layout.addStretch()
+        preview_layout.addLayout(action_layout)
 
         self.confirm_button = QPushButton("Confirm and Move Files")
         self.confirm_button.clicked.connect(self.confirm_and_move_files)
         self.confirm_button.setEnabled(False)
-        layout.addWidget(self.confirm_button)
+        self.confirm_button.setProperty("class", "primary")
+        self.confirm_button.setDefault(True)
+        action_layout.addWidget(self.confirm_button)
 
-        self.folder_path = ""
-        self.files_to_sort = {}
+        self.setStatusBar(QStatusBar(self))
+        self.apply_styles()
+        self.set_status("Ready")
 
     def choose_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
         if folder_path:
             self.folder_path = folder_path
             self.folder_label.setText(f"Selected Folder: {folder_path}")
+            self.set_status("Folder selected")
             self.list_files()
 
     def list_files(self):
         self.file_list.clear()
         if not os.path.isdir(self.folder_path):
             QMessageBox.warning(self, "Error", "The selected path is not a valid folder.")
+            self.set_status("Invalid folder selected")
             return
 
         self.files_to_sort = {}
@@ -96,6 +143,8 @@ class FileSorterApp(QMainWindow):
 
         self.update_preview()
         self.confirm_button.setEnabled(True)
+        file_count = sum(len(files) for files in self.files_to_sort.values())
+        self.set_status(f"Files found: {file_count}")
 
     def update_preview(self):
         self.file_list.clear()
@@ -122,19 +171,27 @@ class FileSorterApp(QMainWindow):
                 organized_files[destination_folder].append(file)
 
         for folder, files in organized_files.items():
-            folder_item = QListWidgetItem(f"Folder: {folder}")
-            folder_item.setBackground(QBrush(QColor("#d1e7dd")))  # Light green background for folder headers
-            folder_item.setForeground(QBrush(QColor("#0f5132")))  # Dark green text for folder headers
+            folder_item = QListWidgetItem(f"Folder: {folder} ({len(files)})")
+            folder_item.setData(Qt.ItemDataRole.UserRole, "header")
+            header_font = QFont(self.file_list.font())
+            header_font.setBold(True)
+            header_font.setPointSize(header_font.pointSize() + 1)
+            folder_item.setFont(header_font)
+            folder_item.setForeground(QColor("#1f4f46"))
             self.file_list.addItem(folder_item)
 
             for file in files:
-                file_item = QListWidgetItem(f"  - {file}")
-                file_item.setForeground(QBrush(QColor("#000000")))  # Black text for file names
+                file_item = QListWidgetItem(f"  └ {file}")
+                file_item.setData(Qt.ItemDataRole.UserRole, "file")
+                file_item.setForeground(QColor("#1e1e1e"))
                 self.file_list.addItem(file_item)
+        total_items = self.file_list.count()
+        self.set_status(f"Preview ready: {total_items} rows")
 
     def confirm_and_move_files(self):
         if not self.files_to_sort:
             QMessageBox.warning(self, "Error", "No files to sort.")
+            self.set_status("No files to sort")
             return
 
         reply = QMessageBox.question(
@@ -178,8 +235,13 @@ class FileSorterApp(QMainWindow):
                     "Completed With Warnings",
                     f"Moved {moved_count} files. Skipped {len(skipped_files)} missing files."
                 )
+                self.set_status(
+                    f"Moved {moved_count}, skipped {len(skipped_files)}",
+                    5000
+                )
             else:
                 QMessageBox.information(self, "Success", f"Moved {moved_count} files successfully.")
+                self.set_status(f"Moved {moved_count} files", 5000)
             self.list_files()
 
     def get_file_type(self, file_name):
@@ -202,6 +264,77 @@ class FileSorterApp(QMainWindow):
             return "Database"
 
         return "Other"
+
+    def set_status(self, text: str, timeout_ms: int = 3000):
+        self.statusBar().showMessage(text, timeout_ms)
+
+    def apply_styles(self):
+        qss = """
+        QWidget {
+            background-color: #f6f7f9;
+            color: #1f2328;
+            font-size: 13px;
+        }
+        QGroupBox {
+            border: 1px solid #d8dee4;
+            border-radius: 8px;
+            margin-top: 10px;
+            padding: 8px;
+            background-color: #fbfcfe;
+            font-weight: 600;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px;
+            color: #374151;
+        }
+        QLabel#typeSortingDesc {
+            color: #5f6b7a;
+            font-size: 11px;
+        }
+        QListWidget {
+            background-color: #ffffff;
+            border: 1px solid #d8dee4;
+            border-radius: 6px;
+            padding: 6px;
+        }
+        QListWidget:focus {
+            border: 1px solid #7aa2ff;
+        }
+        QPushButton {
+            background-color: #eef1f5;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #e5eaf1;
+        }
+        QPushButton:disabled {
+            background-color: #f1f3f6;
+            color: #9aa4b2;
+            border-color: #e1e5ea;
+        }
+        QPushButton[class="primary"] {
+            background-color: #1f6feb;
+            color: white;
+            border: 1px solid #1b63d1;
+            font-weight: 600;
+        }
+        QPushButton[class="primary"]:hover {
+            background-color: #1a61cf;
+        }
+        QFrame {
+            color: #e3e8ef;
+        }
+        QStatusBar {
+            background-color: #f6f7f9;
+            color: #4b5563;
+            border-top: 1px solid #dde3ea;
+        }
+        """
+        QApplication.instance().setStyleSheet(qss)
 
 
 if __name__ == "__main__":
