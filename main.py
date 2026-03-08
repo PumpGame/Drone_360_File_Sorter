@@ -25,6 +25,11 @@ class FileSorterApp(QMainWindow):
         self.folder_path = ""
         self.files_to_sort = {}
         self._keywords_cache: dict[str, list[str]] = {}
+        self.ignored_system_files = {
+            "desktop.ini",
+            "thumbs.db",
+            ".ds_store",
+        }
 
         # Main layout
         self.central_widget = QWidget()
@@ -152,7 +157,7 @@ class FileSorterApp(QMainWindow):
 
         for file_name in os.listdir(self.folder_path):
             full_path = os.path.join(self.folder_path, file_name)
-            if os.path.isfile(full_path):
+            if os.path.isfile(full_path) and not self.should_skip_file(file_name):
                 modified_time = os.path.getmtime(full_path)
                 modified_date = datetime.fromtimestamp(modified_time).strftime("%Y-%m-%d")
                 if modified_date not in self.files_to_sort:
@@ -542,6 +547,14 @@ class FileSorterApp(QMainWindow):
             if not os.path.exists(candidate):
                 return candidate
             index += 1
+
+    def should_skip_file(self, file_name: str) -> bool:
+        lower = file_name.lower()
+        if lower in self.ignored_system_files:
+            return True
+        if lower.startswith("._"):
+            return True
+        return False
 
     def get_file_type(self, file_name):
         name = file_name.lower()
