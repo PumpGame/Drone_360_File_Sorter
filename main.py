@@ -3,10 +3,11 @@ import os
 import subprocess
 import json
 import shutil
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle
+    QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle,
+    QLineEdit, QFormLayout
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
@@ -31,11 +32,14 @@ class FileSorterApp(QMainWindow):
         self.folder_path = ""
         self.files_to_sort = {}
         self._keywords_cache: dict[str, list[str]] = {}
+        self.settings = QSettings("Drone360", "FileSorter")
         self.ignored_system_files = {
             "desktop.ini",
             "thumbs.db",
             ".ds_store",
         }
+        self.default_folder_names = self.build_default_folder_names()
+        self.custom_folder_name_edits: dict[str, QLineEdit] = {}
 
         # Main layout
         self.central_widget = QWidget()
@@ -96,6 +100,40 @@ class FileSorterApp(QMainWindow):
         self.type_sorting_desc = QLabel(f"Sortuje po typie pliku: {formats_txt}")
         self.type_sorting_desc.setObjectName("typeSortingDesc")
         options_layout.addWidget(self.type_sorting_desc)
+
+        self.enable_custom_folder_names_checkbox = QCheckBox("Enable Custom Folder Names")
+        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.update_custom_folder_name_state)
+        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.save_ui_settings)
+        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.update_preview)
+        options_layout.addWidget(self.enable_custom_folder_names_checkbox)
+
+        self.custom_folder_names_group = QGroupBox("Custom Folder Names")
+        custom_folder_names_container_layout = QVBoxLayout()
+        custom_folder_names_container_layout.setContentsMargins(10, 10, 10, 10)
+        custom_folder_names_container_layout.setSpacing(8)
+        self.custom_folder_names_group.setLayout(custom_folder_names_container_layout)
+        options_layout.addWidget(self.custom_folder_names_group)
+
+        self.custom_folder_names_info = QLabel("Settings are saved automatically.")
+        self.custom_folder_names_info.setObjectName("customFolderNamesInfo")
+        custom_folder_names_container_layout.addWidget(self.custom_folder_names_info)
+
+        custom_folder_names_layout = QFormLayout()
+        custom_folder_names_layout.setContentsMargins(0, 0, 0, 0)
+        custom_folder_names_layout.setSpacing(8)
+        custom_folder_names_container_layout.addLayout(custom_folder_names_layout)
+
+        for category, default_name in self.default_folder_names.items():
+            edit = QLineEdit(default_name)
+            edit.setPlaceholderText(default_name)
+            edit.setToolTip(f"Custom folder name for {category}")
+            edit.textChanged.connect(self.save_ui_settings)
+            edit.textChanged.connect(self.update_preview)
+            self.custom_folder_name_edits[category] = edit
+            custom_folder_names_layout.addRow(f"{category}:", edit)
+
+        self.load_ui_settings()
+        self.update_custom_folder_name_state()
         # --------------------------------------------------------
 
         # Preview & Actions section
@@ -517,6 +555,63 @@ class FileSorterApp(QMainWindow):
         self._keywords_cache[normalized_path] = keywords
         return keywords
 
+    def build_default_folder_names(self) -> dict[str, str]:
+        return {
+            "Pano": "Pano",
+            "Insta360": "Insta360",
+            "Jpg": "Jpg",
+            "Video": "Video",
+            "Raw": "Raw",
+            "Database": "Database",
+            "Other": "Other",
+        }
+
+    def sanitize_folder_name(self, name: str) -> str:
+        sanitized = name.replace("/", "_").replace("\\", "_")
+        return sanitized.strip()
+
+    def get_effective_folder_name(self, category: str) -> str:
+        default_name = self.default_folder_names.get(category, category)
+        if not self.enable_custom_folder_names_checkbox.isChecked():
+            return default_name
+
+        edit = self.custom_folder_name_edits.get(category)
+        if edit is None:
+            return default_name
+
+        custom_name = self.sanitize_folder_name(edit.text())
+        return custom_name or default_name
+
+    def update_custom_folder_name_state(self):
+        enabled = self.enable_custom_folder_names_checkbox.isChecked()
+        self.custom_folder_names_group.setEnabled(enabled)
+        self.custom_folder_names_group.setVisible(enabled)
+        tooltip = "Custom folder names are enabled." if enabled else "Enable custom folder names to edit target folder names."
+        self.custom_folder_names_group.setToolTip(tooltip)
+        for category, edit in self.custom_folder_name_edits.items():
+            edit.setEnabled(enabled)
+            edit.setToolTip(
+                f"Custom folder name for {category}" if enabled else "Enable custom folder names to edit this field."
+            )
+
+    def load_ui_settings(self):
+        custom_enabled = self.settings.value("custom_folder_names/enabled", False, type=bool)
+        self.enable_custom_folder_names_checkbox.setChecked(custom_enabled)
+
+        for category, default_name in self.default_folder_names.items():
+            saved_name = self.settings.value(f"custom_folder_names/{category}", default_name, type=str)
+            edit = self.custom_folder_name_edits.get(category)
+            if edit is not None:
+                edit.setText(saved_name)
+
+    def save_ui_settings(self):
+        self.settings.setValue(
+            "custom_folder_names/enabled",
+            self.enable_custom_folder_names_checkbox.isChecked()
+        )
+        for category, edit in self.custom_folder_name_edits.items():
+            self.settings.setValue(f"custom_folder_names/{category}", edit.text())
+
     # pano rule
     def get_destination_folder(self, date: str, filename: str) -> str:
         base = os.path.join(self.folder_path, date)
@@ -525,14 +620,16 @@ class FileSorterApp(QMainWindow):
         if file_lower.endswith(".db"):
             return base
         if file_lower.endswith(".srt"):
-            return os.path.join(base, "Video")
+            return os.path.join(base, self.get_effective_folder_name("Video"))
 
         if self.enable_type_sorting_checkbox.isChecked():
             source_path = os.path.join(self.folder_path, filename)
             is_pano = self.has_pano_tag(source_path)
             if is_pano:
-                return os.path.join(base, "Pano")
-            return os.path.join(base, self.get_file_type(filename))
+                category = "Pano"
+            else:
+                category = self.get_file_type(filename)
+            return os.path.join(base, self.get_effective_folder_name(category))
         return base
 
     def get_undo_log_path(self) -> str:
@@ -657,6 +754,13 @@ class FileSorterApp(QMainWindow):
         QLabel#typeSortingDesc {
             color: #b8b8b8;
             font-size: 11px;
+        }
+        QLabel#customFolderNamesInfo {
+            color: #b8b8b8;
+            font-size: 11px;
+        }
+        QLineEdit:disabled {
+            color: #9a9a9a;
         }
         QTreeWidget {
             border: 1px solid #4a4a4a;
