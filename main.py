@@ -32,6 +32,7 @@ class FileSorterApp(QMainWindow):
         self.folder_path = ""
         self.files_to_sort = {}
         self._keywords_cache: dict[str, list[str]] = {}
+        self._settings_updates_paused = False
         self.settings = QSettings("Drone360", "FileSorter")
         self.ignored_system_files = {
             "desktop.ini",
@@ -132,9 +133,9 @@ class FileSorterApp(QMainWindow):
 
         # Extensions that this option will sort into subfolders
         self.type_sorting_formats = [
-            ".jpg", ".jpeg", ".png",
-            ".dng",
-            ".mp4", ".mov",
+            ".jpg", ".jpeg",
+            ".dng", ".arw", ".cr2", ".cr3", ".nef", ".nrw", ".orf", ".raf", ".rw2", ".pef",
+            ".mp4", ".mov", ".avi", ".mkv", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv",
             ".insv",  # Insta360 video
             ".insp",  # Insta360 photo container
             ".lrv",   # Insta360 low-res preview video
@@ -191,6 +192,11 @@ class FileSorterApp(QMainWindow):
         self.add_custom_rule_button.setProperty("class", "secondary")
         self.add_custom_rule_button.clicked.connect(lambda checked=False: self.add_type_rule_row())
         self.type_rules_content_layout.addWidget(self.add_custom_rule_button)
+
+        self.reset_settings_button = QPushButton("Reset to Defaults")
+        self.reset_settings_button.setProperty("class", "secondary")
+        self.reset_settings_button.clicked.connect(self.reset_to_defaults)
+        options_layout.addWidget(self.reset_settings_button)
 
         self.load_ui_settings()
         if not self.custom_type_rule_rows:
@@ -661,7 +667,7 @@ class FileSorterApp(QMainWindow):
             {
                 "id": "Jpg",
                 "folder_name": "Jpg",
-                "extensions": [".jpg", ".jpeg", ".png"],
+                "extensions": [".jpg", ".jpeg"],
                 "description": "photos / still images",
                 "matcher": "extension",
                 "removable": False,
@@ -669,7 +675,7 @@ class FileSorterApp(QMainWindow):
             {
                 "id": "Video",
                 "folder_name": "Video",
-                "extensions": [".mp4", ".mov", ".srt"],
+                "extensions": [".mp4", ".mov", ".avi", ".mkv", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv", ".srt"],
                 "description": "video files and subtitles",
                 "matcher": "extension",
                 "removable": False,
@@ -677,7 +683,7 @@ class FileSorterApp(QMainWindow):
             {
                 "id": "Raw",
                 "folder_name": "Raw",
-                "extensions": [".dng"],
+                "extensions": [".dng", ".arw", ".cr2", ".cr3", ".nef", ".nrw", ".orf", ".raf", ".rw2", ".pef"],
                 "description": "raw photos",
                 "matcher": "extension",
                 "removable": False,
@@ -737,6 +743,73 @@ class FileSorterApp(QMainWindow):
                 normalized.append(ext)
                 seen.add(ext)
         return normalized
+
+    def clear_type_rule_rows(self):
+        for row in self.custom_type_rule_rows:
+            widget = row.get("widget")
+            if isinstance(widget, QWidget):
+                widget.setParent(None)
+                widget.deleteLater()
+        self.custom_type_rule_rows = []
+
+    def apply_default_settings(self, save: bool = True):
+        self._settings_updates_paused = True
+        self.enable_year_folder_checkbox.setChecked(False)
+        self.enable_month_folder_checkbox.setChecked(False)
+
+        default_date_index = 0
+        for index, (_, pattern) in enumerate(self.date_format_options):
+            if pattern == "%Y-%m-%d":
+                default_date_index = index
+                break
+        self.date_format_combo.setCurrentIndex(default_date_index)
+
+        self.enable_type_sorting_checkbox.setChecked(False)
+        self.type_rules_expanded = True
+        self.type_rules_toggle_button.setChecked(True)
+
+        self.clear_type_rule_rows()
+        for rule in self.default_type_rules:
+            self.add_type_rule_row(
+                rule_id=rule["id"],
+                folder_name=rule["folder_name"],
+                extensions=", ".join(rule["extensions"]),
+                description=rule["description"],
+                matcher=rule["matcher"],
+                removable=rule["removable"],
+            )
+
+        self._settings_updates_paused = False
+        self.refresh_type_sorting_description()
+        self.update_type_rules_state()
+        if save:
+            self.save_ui_settings()
+        self.update_preview()
+
+    def reset_to_defaults(self):
+        reply = QMessageBox.question(
+            self,
+            "Reset settings",
+            "Reset sorting settings to current factory defaults?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        for key in (
+            "date_structure/year_folder",
+            "date_structure/month_folder",
+            "date_format/pattern",
+            "type_sorting/enabled",
+            "type_rules/expanded",
+            "type_rules/items",
+            "custom_type_rules/items",
+            "custom_folder_names",
+        ):
+            self.settings.remove(key)
+
+        self.apply_default_settings(save=True)
+        self.set_status("Settings reset to defaults", 4000)
 
     def refresh_type_sorting_description(self):
         extensions: list[str] = []
@@ -914,6 +987,8 @@ class FileSorterApp(QMainWindow):
         return sanitized.strip()
 
     def load_ui_settings(self):
+        self._settings_updates_paused = True
+        self.clear_type_rule_rows()
         self.enable_year_folder_checkbox.setChecked(
             self.settings.value("date_structure/year_folder", False, type=bool)
         )
@@ -973,6 +1048,13 @@ class FileSorterApp(QMainWindow):
         else:
             self.load_legacy_type_rules()
 
+        self._settings_updates_paused = False
+        if not self.custom_type_rule_rows:
+            self.apply_default_settings(save=False)
+        else:
+            self.refresh_type_sorting_description()
+            self.update_type_rules_state()
+
     def load_legacy_type_rules(self):
         for rule in self.default_type_rules:
             saved_folder_name = self.settings.value(
@@ -1019,6 +1101,8 @@ class FileSorterApp(QMainWindow):
             self.add_type_rule_row(folder_name=folder_name, extensions=extensions_text, description="custom rule")
 
     def save_ui_settings(self):
+        if self._settings_updates_paused:
+            return
         self.settings.setValue("date_structure/year_folder", self.enable_year_folder_checkbox.isChecked())
         self.settings.setValue("date_structure/month_folder", self.enable_month_folder_checkbox.isChecked())
         self.settings.setValue("date_format/pattern", self.get_selected_date_format())
