@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle,
-    QLineEdit, QFormLayout
+    QLineEdit, QFormLayout, QToolButton
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
@@ -40,6 +40,7 @@ class FileSorterApp(QMainWindow):
         }
         self.default_folder_names = self.build_default_folder_names()
         self.custom_folder_name_edits: dict[str, QLineEdit] = {}
+        self.custom_folder_names_expanded = True
 
         # Main layout
         self.central_widget = QWidget()
@@ -114,14 +115,40 @@ class FileSorterApp(QMainWindow):
         self.custom_folder_names_group.setLayout(custom_folder_names_container_layout)
         options_layout.addWidget(self.custom_folder_names_group)
 
+        self.custom_folder_names_toggle_button = QToolButton()
+        self.custom_folder_names_toggle_button.setText("Custom Folder Name Fields")
+        self.custom_folder_names_toggle_button.setCheckable(True)
+        self.custom_folder_names_toggle_button.setChecked(True)
+        self.custom_folder_names_toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.custom_folder_names_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
+        self.custom_folder_names_toggle_button.clicked.connect(self.toggle_custom_folder_names_section)
+        custom_folder_names_container_layout.addWidget(self.custom_folder_names_toggle_button)
+
+        self.custom_folder_names_content = QWidget()
+        custom_folder_names_content_layout = QVBoxLayout()
+        custom_folder_names_content_layout.setContentsMargins(0, 0, 0, 0)
+        custom_folder_names_content_layout.setSpacing(8)
+        self.custom_folder_names_content.setLayout(custom_folder_names_content_layout)
+        custom_folder_names_container_layout.addWidget(self.custom_folder_names_content)
+
         self.custom_folder_names_info = QLabel("Settings are saved automatically.")
         self.custom_folder_names_info.setObjectName("customFolderNamesInfo")
-        custom_folder_names_container_layout.addWidget(self.custom_folder_names_info)
+        custom_folder_names_content_layout.addWidget(self.custom_folder_names_info)
 
         custom_folder_names_layout = QFormLayout()
         custom_folder_names_layout.setContentsMargins(0, 0, 0, 0)
         custom_folder_names_layout.setSpacing(8)
-        custom_folder_names_container_layout.addLayout(custom_folder_names_layout)
+        custom_folder_names_content_layout.addLayout(custom_folder_names_layout)
+
+        category_descriptions = {
+            "Pano": "pano-tagged JPG/JPEG",
+            "Insta360": ".insv, .insp, .lrv",
+            "Jpg": ".jpg, .jpeg, .png",
+            "Video": ".mp4, .mov, .srt",
+            "Raw": ".dng",
+            "Database": ".db",
+            "Other": "all other files",
+        }
 
         for category, default_name in self.default_folder_names.items():
             edit = QLineEdit(default_name)
@@ -130,7 +157,19 @@ class FileSorterApp(QMainWindow):
             edit.textChanged.connect(self.save_ui_settings)
             edit.textChanged.connect(self.update_preview)
             self.custom_folder_name_edits[category] = edit
-            custom_folder_names_layout.addRow(f"{category}:", edit)
+
+            field_widget = QWidget()
+            field_layout = QVBoxLayout()
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(2)
+            field_widget.setLayout(field_layout)
+            field_layout.addWidget(edit)
+
+            description_label = QLabel(category_descriptions.get(category, ""))
+            description_label.setObjectName("customFolderNamesInfo")
+            field_layout.addWidget(description_label)
+
+            custom_folder_names_layout.addRow(f"{category}:", field_widget)
 
         self.load_ui_settings()
         self.update_custom_folder_name_state()
@@ -586,6 +625,11 @@ class FileSorterApp(QMainWindow):
         enabled = self.enable_custom_folder_names_checkbox.isChecked()
         self.custom_folder_names_group.setEnabled(enabled)
         self.custom_folder_names_group.setVisible(enabled)
+        self.custom_folder_names_toggle_button.setEnabled(enabled)
+        self.custom_folder_names_content.setVisible(enabled and self.custom_folder_names_expanded)
+        self.custom_folder_names_toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if self.custom_folder_names_expanded else Qt.ArrowType.RightArrow
+        )
         tooltip = "Custom folder names are enabled." if enabled else "Enable custom folder names to edit target folder names."
         self.custom_folder_names_group.setToolTip(tooltip)
         for category, edit in self.custom_folder_name_edits.items():
@@ -594,8 +638,15 @@ class FileSorterApp(QMainWindow):
                 f"Custom folder name for {category}" if enabled else "Enable custom folder names to edit this field."
             )
 
+    def toggle_custom_folder_names_section(self):
+        self.custom_folder_names_expanded = self.custom_folder_names_toggle_button.isChecked()
+        self.update_custom_folder_name_state()
+        self.save_ui_settings()
+
     def load_ui_settings(self):
         custom_enabled = self.settings.value("custom_folder_names/enabled", False, type=bool)
+        self.custom_folder_names_expanded = self.settings.value("custom_folder_names/expanded", True, type=bool)
+        self.custom_folder_names_toggle_button.setChecked(self.custom_folder_names_expanded)
         self.enable_custom_folder_names_checkbox.setChecked(custom_enabled)
 
         for category, default_name in self.default_folder_names.items():
@@ -609,6 +660,7 @@ class FileSorterApp(QMainWindow):
             "custom_folder_names/enabled",
             self.enable_custom_folder_names_checkbox.isChecked()
         )
+        self.settings.setValue("custom_folder_names/expanded", self.custom_folder_names_expanded)
         for category, edit in self.custom_folder_name_edits.items():
             self.settings.setValue(f"custom_folder_names/{category}", edit.text())
 
