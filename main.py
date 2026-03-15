@@ -1,6 +1,5 @@
 import sys
 import os
-import subprocess
 import json
 import shutil
 from PySide6.QtCore import Qt, QSettings
@@ -11,6 +10,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
+
+try:
+    import pythoncom
+    import win32com.client
+except ImportError:
+    pythoncom = None
+    win32com = None
 
 # NOTE: PIL imports were in the original file, but not used.
 # Kept out to avoid needing extra dependencies.
@@ -566,53 +572,36 @@ class FileSorterApp(QMainWindow):
         if normalized_path in self._keywords_cache:
             return self._keywords_cache[normalized_path]
 
-        dir_path = os.path.dirname(normalized_path)
-        file_name = os.path.basename(normalized_path)
-        safe_dir = dir_path.replace("'", "''")
-        safe_name = file_name.replace("'", "''")
         keywords: list[str] = []
-        powershell_exe = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-        if not os.path.exists(powershell_exe):
-            powershell_exe = "powershell"
-        ps_script = (
-            "$shell = New-Object -ComObject Shell.Application; "
-            "$folder = $shell.NameSpace('" + safe_dir + "'); "
-            "if ($null -eq $folder) { return }; "
-            "$item = $folder.ParseName('" + safe_name + "'); "
-            "if ($null -eq $item) { return }; "
-            "$kw = $item.ExtendedProperty('System.Keywords'); "
-            "if ($null -eq $kw) { return }; "
-            "if ($kw -is [System.Array]) { [Console]::Out.Write(($kw -join ';')) } "
-            "else { [Console]::Out.Write([string]$kw) } "
-        )
+        file_name = os.path.basename(normalized_path)
 
         try:
-            result = subprocess.run(
-                [
-                    powershell_exe,
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    ps_script,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            debug_enabled = os.environ.get("DRONESORT_DEBUG") == "1"
-            stderr_text = (result.stderr or "").strip()
-            if debug_enabled and (result.returncode != 0 or stderr_text):
-                self.statusBar().showMessage(f"Pano keywords failed: {stderr_text[:120]}", 8000)
-
-            if result.returncode == 0 and result.stdout:
-                keywords = [
-                    part.strip().lower()
-                    for part in result.stdout.split(";")
-                    if part.strip()
-                ]
+            if os.name == "nt" and pythoncom is not None and win32com is not None:
+                pythoncom.CoInitialize()
+                shell = win32com.client.Dispatch("Shell.Application")
+                folder = shell.NameSpace(os.path.dirname(normalized_path))
+                if folder is not None:
+                    item = folder.ParseName(file_name)
+                    if item is not None:
+                        raw_keywords = item.ExtendedProperty("System.Keywords")
+                        if raw_keywords:
+                            if isinstance(raw_keywords, (list, tuple)):
+                                parts = raw_keywords
+                            else:
+                                parts = str(raw_keywords).split(";")
+                            keywords = [
+                                str(part).strip().lower()
+                                for part in parts
+                                if str(part).strip()
+                            ]
         except Exception:
             keywords = []
+        finally:
+            if os.name == "nt" and pythoncom is not None:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
         if not keywords and file_name.lower().endswith((".jpg", ".jpeg")):
             # Fallback for some files that keep pano-like metadata as UTF-16LE fragments.
