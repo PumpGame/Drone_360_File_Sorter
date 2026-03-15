@@ -140,6 +140,7 @@ class FileSorterApp(QMainWindow):
         # Extensions that this option will sort into subfolders
         self.type_sorting_formats = [
             ".jpg", ".jpeg",
+            ".heic", ".heif",
             ".dng", ".arw", ".cr2", ".cr3", ".nef", ".nrw", ".orf", ".raf", ".rw2", ".pef",
             ".mp4", ".mov", ".avi", ".mkv", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv",
             ".insv",  # Insta360 video
@@ -678,6 +679,14 @@ class FileSorterApp(QMainWindow):
                 "removable": False,
             },
             {
+                "id": "Heic",
+                "folder_name": "Heic",
+                "extensions": [".heic", ".heif"],
+                "description": "HEIC / HEIF photos",
+                "matcher": "extension",
+                "removable": False,
+            },
+            {
                 "id": "Other",
                 "folder_name": "Other",
                 "extensions": [],
@@ -975,6 +984,25 @@ class FileSorterApp(QMainWindow):
         sanitized = name.replace("/", "_").replace("\\", "_")
         return sanitized.strip()
 
+    def merge_missing_default_rules(self, saved_rules: list[dict[str, object]]) -> list[dict[str, object]]:
+        merged_rules: list[dict[str, object]] = []
+        existing_ids: set[str] = set()
+
+        for rule in saved_rules:
+            if not isinstance(rule, dict):
+                continue
+            merged_rules.append(rule)
+            rule_id = str(rule.get("id", "")).strip()
+            if rule_id:
+                existing_ids.add(rule_id)
+
+        for default_rule in self.default_type_rules:
+            default_rule_id = str(default_rule.get("id", "")).strip()
+            if default_rule_id and default_rule_id not in existing_ids:
+                merged_rules.append(dict(default_rule))
+
+        return merged_rules
+
     def load_ui_settings(self):
         self._settings_updates_paused = True
         self.clear_type_rule_rows()
@@ -1007,6 +1035,7 @@ class FileSorterApp(QMainWindow):
             saved_rules = []
 
         if isinstance(saved_rules, list):
+            saved_rules = self.merge_missing_default_rules(saved_rules)
             for rule in saved_rules:
                 if not isinstance(rule, dict):
                     continue
@@ -1181,24 +1210,24 @@ class FileSorterApp(QMainWindow):
         name = file_name.lower()
 
         # Insta360 recording-related files
-        if name.endswith((".insv", ".insp", ".lrv")):
+        if name.endswith((".insv", ".insp", ".lrv", ".db")):
             return "Insta360"
 
         # Photos / stills
-        if name.endswith((".jpg", ".jpeg", ".png")):
+        if name.endswith((".jpg", ".jpeg")):
             return "Jpg"
 
+        # HEIC / HEIF photos
+        if name.endswith((".heic", ".heif")):
+            return "Heic"
+
         # Video
-        if name.endswith((".mp4", ".mov", ".srt")):
+        if name.endswith((".mp4", ".mov", ".avi", ".mkv", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv", ".srt")):
             return "Video"
 
         # Raw
-        if name.endswith(".dng"):
+        if name.endswith((".dng", ".arw", ".cr2", ".cr3", ".nef", ".nrw", ".orf", ".raf", ".rw2", ".pef")):
             return "Raw"
-
-        # Insta360 helper database files
-        if name.endswith(".db"):
-            return "Insta360"
 
         return "Other"
 
