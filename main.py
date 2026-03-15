@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle,
-    QLineEdit, QFormLayout, QToolButton
+    QLineEdit, QToolButton, QComboBox
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
@@ -39,8 +39,17 @@ class FileSorterApp(QMainWindow):
             ".ds_store",
         }
         self.default_folder_names = self.build_default_folder_names()
-        self.custom_folder_name_edits: dict[str, QLineEdit] = {}
-        self.custom_folder_names_expanded = True
+        self.default_type_rules = self.build_default_type_rules()
+        self.custom_type_rule_rows: list[dict[str, object]] = []
+        self.type_rules_expanded = True
+        self.date_format_options = [
+            ("YYYY-MM-DD", "%Y-%m-%d"),
+            ("DD-MM-YYYY", "%d-%m-%Y"),
+            ("YYYY_MM_DD", "%Y_%m_%d"),
+            ("DD_MM_YYYY", "%d_%m_%Y"),
+            ("YYYY.MM.DD", "%Y.%m.%d"),
+            ("DD.MM.YYYY", "%d.%m.%Y"),
+        ]
 
         # Main layout
         self.central_widget = QWidget()
@@ -74,9 +83,51 @@ class FileSorterApp(QMainWindow):
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
 
+        self.date_structure_group = QGroupBox("Date Structure")
+        date_structure_layout = QVBoxLayout()
+        date_structure_layout.setContentsMargins(10, 10, 10, 10)
+        date_structure_layout.setSpacing(8)
+        self.date_structure_group.setLayout(date_structure_layout)
+        options_layout.addWidget(self.date_structure_group)
+
+        self.enable_year_folder_checkbox = QCheckBox("Add Year Folders")
+        self.enable_year_folder_checkbox.stateChanged.connect(self.save_ui_settings)
+        self.enable_year_folder_checkbox.stateChanged.connect(self.update_preview)
+        date_structure_layout.addWidget(self.enable_year_folder_checkbox)
+
+        self.enable_month_folder_checkbox = QCheckBox("Add Month Folders (01-12)")
+        self.enable_month_folder_checkbox.stateChanged.connect(self.save_ui_settings)
+        self.enable_month_folder_checkbox.stateChanged.connect(self.update_preview)
+        date_structure_layout.addWidget(self.enable_month_folder_checkbox)
+
+        self.date_format_group = QGroupBox("Date Format")
+        date_format_group_layout = QVBoxLayout()
+        date_format_group_layout.setContentsMargins(10, 10, 10, 10)
+        date_format_group_layout.setSpacing(8)
+        self.date_format_group.setLayout(date_format_group_layout)
+        options_layout.addWidget(self.date_format_group)
+
+        date_format_layout = QHBoxLayout()
+        date_format_layout.setContentsMargins(0, 0, 0, 0)
+        date_format_layout.setSpacing(8)
+        date_format_group_layout.addLayout(date_format_layout)
+
+        self.date_format_label = QLabel("Date format:")
+        date_format_layout.addWidget(self.date_format_label)
+
+        self.date_format_combo = QComboBox()
+        for label, pattern in self.date_format_options:
+            self.date_format_combo.addItem(label, pattern)
+        self.date_format_combo.currentIndexChanged.connect(self.save_ui_settings)
+        self.date_format_combo.currentIndexChanged.connect(self.update_preview)
+        date_format_layout.addWidget(self.date_format_combo)
+        date_format_layout.addStretch()
+
         # -------- File Type Sorting checkbox + description --------
         self.enable_type_sorting_checkbox = QCheckBox("Enable File Type Sorting")
         self.enable_type_sorting_checkbox.stateChanged.connect(self.update_preview)
+        self.enable_type_sorting_checkbox.stateChanged.connect(self.update_type_rules_state)
+        self.enable_type_sorting_checkbox.stateChanged.connect(self.save_ui_settings)
         options_layout.addWidget(self.enable_type_sorting_checkbox)
 
         # Extensions that this option will sort into subfolders
@@ -102,77 +153,58 @@ class FileSorterApp(QMainWindow):
         self.type_sorting_desc.setObjectName("typeSortingDesc")
         options_layout.addWidget(self.type_sorting_desc)
 
-        self.enable_custom_folder_names_checkbox = QCheckBox("Enable Custom Folder Names")
-        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.update_custom_folder_name_state)
-        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.save_ui_settings)
-        self.enable_custom_folder_names_checkbox.stateChanged.connect(self.update_preview)
-        options_layout.addWidget(self.enable_custom_folder_names_checkbox)
+        self.custom_type_rules_group = QGroupBox("Type Rules")
+        custom_type_rules_layout = QVBoxLayout()
+        custom_type_rules_layout.setContentsMargins(10, 10, 10, 10)
+        custom_type_rules_layout.setSpacing(8)
+        self.custom_type_rules_group.setLayout(custom_type_rules_layout)
+        options_layout.addWidget(self.custom_type_rules_group)
 
-        self.custom_folder_names_group = QGroupBox("Custom Folder Names")
-        custom_folder_names_container_layout = QVBoxLayout()
-        custom_folder_names_container_layout.setContentsMargins(10, 10, 10, 10)
-        custom_folder_names_container_layout.setSpacing(8)
-        self.custom_folder_names_group.setLayout(custom_folder_names_container_layout)
-        options_layout.addWidget(self.custom_folder_names_group)
+        self.type_rules_toggle_button = QToolButton()
+        self.type_rules_toggle_button.setText("Type Rules")
+        self.type_rules_toggle_button.setCheckable(True)
+        self.type_rules_toggle_button.setChecked(True)
+        self.type_rules_toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.type_rules_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
+        self.type_rules_toggle_button.clicked.connect(self.toggle_type_rules_section)
+        custom_type_rules_layout.addWidget(self.type_rules_toggle_button)
 
-        self.custom_folder_names_toggle_button = QToolButton()
-        self.custom_folder_names_toggle_button.setText("Custom Folder Name Fields")
-        self.custom_folder_names_toggle_button.setCheckable(True)
-        self.custom_folder_names_toggle_button.setChecked(True)
-        self.custom_folder_names_toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.custom_folder_names_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
-        self.custom_folder_names_toggle_button.clicked.connect(self.toggle_custom_folder_names_section)
-        custom_folder_names_container_layout.addWidget(self.custom_folder_names_toggle_button)
+        self.type_rules_content_widget = QWidget()
+        self.type_rules_content_layout = QVBoxLayout()
+        self.type_rules_content_layout.setContentsMargins(0, 0, 0, 0)
+        self.type_rules_content_layout.setSpacing(8)
+        self.type_rules_content_widget.setLayout(self.type_rules_content_layout)
+        custom_type_rules_layout.addWidget(self.type_rules_content_widget)
 
-        self.custom_folder_names_content = QWidget()
-        custom_folder_names_content_layout = QVBoxLayout()
-        custom_folder_names_content_layout.setContentsMargins(0, 0, 0, 0)
-        custom_folder_names_content_layout.setSpacing(8)
-        self.custom_folder_names_content.setLayout(custom_folder_names_content_layout)
-        custom_folder_names_container_layout.addWidget(self.custom_folder_names_content)
+        self.custom_type_rules_info = QLabel(
+            "Edit built-in rules, change folder names and extensions, or add your own new rules."
+        )
+        self.custom_type_rules_info.setObjectName("customFolderNamesInfo")
+        self.type_rules_content_layout.addWidget(self.custom_type_rules_info)
 
-        self.custom_folder_names_info = QLabel("Settings are saved automatically.")
-        self.custom_folder_names_info.setObjectName("customFolderNamesInfo")
-        custom_folder_names_content_layout.addWidget(self.custom_folder_names_info)
+        self.custom_type_rules_content = QVBoxLayout()
+        self.custom_type_rules_content.setContentsMargins(0, 0, 0, 0)
+        self.custom_type_rules_content.setSpacing(8)
+        self.type_rules_content_layout.addLayout(self.custom_type_rules_content)
 
-        custom_folder_names_layout = QFormLayout()
-        custom_folder_names_layout.setContentsMargins(0, 0, 0, 0)
-        custom_folder_names_layout.setSpacing(8)
-        custom_folder_names_content_layout.addLayout(custom_folder_names_layout)
-
-        category_descriptions = {
-            "Pano": "pano-tagged JPG/JPEG",
-            "Insta360": ".insv, .insp, .lrv",
-            "Jpg": ".jpg, .jpeg, .png",
-            "Video": ".mp4, .mov, .srt",
-            "Raw": ".dng",
-            "Database": ".db",
-            "Other": "all other files",
-        }
-
-        for category, default_name in self.default_folder_names.items():
-            edit = QLineEdit(default_name)
-            edit.setPlaceholderText(default_name)
-            edit.setToolTip(f"Custom folder name for {category}")
-            edit.textChanged.connect(self.save_ui_settings)
-            edit.textChanged.connect(self.update_preview)
-            self.custom_folder_name_edits[category] = edit
-
-            field_widget = QWidget()
-            field_layout = QVBoxLayout()
-            field_layout.setContentsMargins(0, 0, 0, 0)
-            field_layout.setSpacing(2)
-            field_widget.setLayout(field_layout)
-            field_layout.addWidget(edit)
-
-            description_label = QLabel(category_descriptions.get(category, ""))
-            description_label.setObjectName("customFolderNamesInfo")
-            field_layout.addWidget(description_label)
-
-            custom_folder_names_layout.addRow(f"{category}:", field_widget)
+        self.add_custom_rule_button = QPushButton("Add Rule")
+        self.add_custom_rule_button.setProperty("class", "secondary")
+        self.add_custom_rule_button.clicked.connect(lambda checked=False: self.add_type_rule_row())
+        self.type_rules_content_layout.addWidget(self.add_custom_rule_button)
 
         self.load_ui_settings()
-        self.update_custom_folder_name_state()
+        if not self.custom_type_rule_rows:
+            for rule in self.default_type_rules:
+                self.add_type_rule_row(
+                    rule_id=rule["id"],
+                    folder_name=rule["folder_name"],
+                    extensions=", ".join(rule["extensions"]),
+                    description=rule["description"],
+                    matcher=rule["matcher"],
+                    removable=rule["removable"],
+                )
+        self.refresh_type_sorting_description()
+        self.update_type_rules_state()
         # --------------------------------------------------------
 
         # Preview & Actions section
@@ -254,6 +286,9 @@ class FileSorterApp(QMainWindow):
         self.set_status(f"Files found: {file_count}")
 
     def update_preview(self):
+        if not hasattr(self, "destination_tree"):
+            return
+
         self.destination_tree.clear()
 
         organized_files = {}
@@ -605,83 +640,409 @@ class FileSorterApp(QMainWindow):
             "Other": "Other",
         }
 
+    def build_default_type_rules(self) -> list[dict[str, object]]:
+        return [
+            {
+                "id": "Pano",
+                "folder_name": "Pano",
+                "extensions": [],
+                "description": "special rule: JPG/JPEG with pano tag or file name",
+                "matcher": "pano",
+                "removable": False,
+            },
+            {
+                "id": "Insta360",
+                "folder_name": "Insta360",
+                "extensions": [".insv", ".insp", ".lrv", ".db"],
+                "description": "Insta360 source files and helper databases",
+                "matcher": "extension",
+                "removable": False,
+            },
+            {
+                "id": "Jpg",
+                "folder_name": "Jpg",
+                "extensions": [".jpg", ".jpeg", ".png"],
+                "description": "photos / still images",
+                "matcher": "extension",
+                "removable": False,
+            },
+            {
+                "id": "Video",
+                "folder_name": "Video",
+                "extensions": [".mp4", ".mov", ".srt"],
+                "description": "video files and subtitles",
+                "matcher": "extension",
+                "removable": False,
+            },
+            {
+                "id": "Raw",
+                "folder_name": "Raw",
+                "extensions": [".dng"],
+                "description": "raw photos",
+                "matcher": "extension",
+                "removable": False,
+            },
+            {
+                "id": "Other",
+                "folder_name": "Other",
+                "extensions": [],
+                "description": "fallback for everything else",
+                "matcher": "catch_all",
+                "removable": False,
+            },
+        ]
+
+    def get_selected_date_format(self) -> str:
+        selected_pattern = self.date_format_combo.currentData()
+        if isinstance(selected_pattern, str) and selected_pattern:
+            return selected_pattern
+        return "%Y-%m-%d"
+
+    def format_folder_date(self, iso_date: str) -> str:
+        try:
+            parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+        except ValueError:
+            return iso_date
+        return parsed.strftime(self.get_selected_date_format())
+
+    def build_date_path_parts(self, iso_date: str) -> list[str]:
+        try:
+            parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+        except ValueError:
+            return [iso_date]
+
+        parts: list[str] = []
+        if self.enable_year_folder_checkbox.isChecked():
+            parts.append(parsed.strftime("%Y"))
+        if self.enable_month_folder_checkbox.isChecked():
+            parts.append(parsed.strftime("%m"))
+        parts.append(parsed.strftime(self.get_selected_date_format()))
+        return parts
+
+    def normalize_extension(self, ext: str) -> str:
+        normalized = ext.strip().lower()
+        if not normalized:
+            return ""
+        if not normalized.startswith("."):
+            normalized = f".{normalized}"
+        return normalized
+
+    def parse_extensions_input(self, raw_value: str) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        separators = raw_value.replace(";", ",").split(",")
+        for part in separators:
+            ext = self.normalize_extension(part)
+            if ext and ext not in seen:
+                normalized.append(ext)
+                seen.add(ext)
+        return normalized
+
+    def refresh_type_sorting_description(self):
+        extensions: list[str] = []
+        seen: set[str] = set()
+        for rule in self.get_type_rules():
+            if rule.get("matcher") != "extension":
+                continue
+            for ext in rule.get("extensions", []):
+                if isinstance(ext, str) and ext not in seen:
+                    extensions.append(ext)
+                    seen.add(ext)
+
+        formats_txt = ", ".join(extensions) if extensions else "(no extensions configured)"
+        description = f"Sortuje po typie pliku: {formats_txt}"
+        self.type_sorting_desc.setText(description)
+        self.enable_type_sorting_checkbox.setToolTip(description)
+
+    def update_type_rules_state(self):
+        enabled = self.enable_type_sorting_checkbox.isChecked()
+        self.custom_type_rules_group.setEnabled(enabled)
+        self.type_rules_toggle_button.setEnabled(enabled)
+        self.type_rules_content_widget.setVisible(enabled and self.type_rules_expanded)
+        self.type_rules_toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if self.type_rules_expanded else Qt.ArrowType.RightArrow
+        )
+        tooltip = (
+            "Type rules are active."
+            if enabled else
+            "Enable file type sorting to edit type rules."
+        )
+        self.custom_type_rules_group.setToolTip(tooltip)
+
+    def toggle_type_rules_section(self):
+        self.type_rules_expanded = self.type_rules_toggle_button.isChecked()
+        self.update_type_rules_state()
+        self.save_ui_settings()
+
+    def add_type_rule_row(
+        self,
+        folder_name: str = "",
+        extensions: str = "",
+        description: str = "",
+        matcher: str = "extension",
+        removable: bool = True,
+        rule_id: str = "",
+    ):
+        row_widget = QWidget()
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_widget.setLayout(row_layout)
+
+        folder_edit = QLineEdit(folder_name)
+        folder_edit.setPlaceholderText("Folder name, e.g. Archive")
+        folder_edit.setToolTip("Target subfolder name for this rule")
+        folder_edit.textChanged.connect(self.save_ui_settings)
+        folder_edit.textChanged.connect(self.update_preview)
+        row_layout.addWidget(folder_edit, 1)
+
+        extensions_edit = QLineEdit(extensions)
+        extensions_edit.setPlaceholderText("Extensions, e.g. .zip, .rar")
+        extensions_edit.setToolTip("Comma-separated list of extensions")
+        extensions_edit.textChanged.connect(self.save_ui_settings)
+        extensions_edit.textChanged.connect(self.update_preview)
+        if matcher != "extension":
+            extensions_edit.setReadOnly(True)
+        row_layout.addWidget(extensions_edit, 2)
+
+        if description:
+            description_label = QLabel(description)
+            description_label.setObjectName("customFolderNamesInfo")
+            row_layout.addWidget(description_label, 2)
+
+        remove_button = QPushButton("Remove")
+        remove_button.setProperty("class", "secondary")
+        remove_button.clicked.connect(lambda checked=False: self.remove_type_rule_row(row_widget))
+        remove_button.setEnabled(removable)
+        row_layout.addWidget(remove_button)
+
+        self.custom_type_rules_content.addWidget(row_widget)
+        self.custom_type_rule_rows.append(
+            {
+                "widget": row_widget,
+                "rule_id": rule_id,
+                "matcher": matcher,
+                "removable": removable,
+                "folder_edit": folder_edit,
+                "extensions_edit": extensions_edit,
+            }
+        )
+        self.save_ui_settings()
+        self.refresh_type_sorting_description()
+        self.update_preview()
+
+    def remove_type_rule_row(self, row_widget: QWidget):
+        if len(self.custom_type_rule_rows) <= 1:
+            row = self.custom_type_rule_rows[0]
+            folder_edit = row["folder_edit"]
+            extensions_edit = row["extensions_edit"]
+            if isinstance(folder_edit, QLineEdit):
+                folder_edit.clear()
+            if isinstance(extensions_edit, QLineEdit):
+                extensions_edit.clear()
+            self.save_ui_settings()
+            self.refresh_type_sorting_description()
+            self.update_preview()
+            return
+
+        remaining_rows: list[dict[str, object]] = []
+        for row in self.custom_type_rule_rows:
+            widget = row["widget"]
+            if widget is row_widget:
+                if isinstance(widget, QWidget):
+                    widget.setParent(None)
+                    widget.deleteLater()
+                continue
+            remaining_rows.append(row)
+        self.custom_type_rule_rows = remaining_rows
+        self.save_ui_settings()
+        self.refresh_type_sorting_description()
+        self.update_preview()
+
+    def get_type_rules(self) -> list[dict[str, object]]:
+        rules: list[dict[str, object]] = []
+        for row in self.custom_type_rule_rows:
+            folder_edit = row["folder_edit"]
+            extensions_edit = row["extensions_edit"]
+            if not isinstance(folder_edit, QLineEdit) or not isinstance(extensions_edit, QLineEdit):
+                continue
+
+            folder_name = self.sanitize_folder_name(folder_edit.text())
+            matcher = str(row.get("matcher", "extension"))
+            extensions = self.parse_extensions_input(extensions_edit.text()) if matcher == "extension" else []
+            if not folder_name:
+                continue
+
+            if matcher == "extension" and not extensions:
+                continue
+
+            rules.append(
+                {
+                    "id": row.get("rule_id", ""),
+                    "folder_name": folder_name,
+                    "extensions": extensions,
+                    "matcher": matcher,
+                }
+            )
+        return rules
+
+    def get_matching_rule_folder_name(self, filename: str, source_path: str) -> str:
+        for rule in self.get_type_rules():
+            matcher = rule.get("matcher")
+            folder_name = rule.get("folder_name")
+            if not isinstance(folder_name, str):
+                continue
+
+            if matcher == "pano" and self.has_pano_tag(source_path):
+                return folder_name
+
+            if matcher == "extension":
+                file_lower = filename.lower()
+                extensions = rule.get("extensions", [])
+                if any(file_lower.endswith(ext) for ext in extensions if isinstance(ext, str)):
+                    return folder_name
+
+        for rule in self.get_type_rules():
+            if rule.get("matcher") == "catch_all":
+                folder_name = rule.get("folder_name")
+                if isinstance(folder_name, str):
+                    return folder_name
+        return "Other"
+
     def sanitize_folder_name(self, name: str) -> str:
         sanitized = name.replace("/", "_").replace("\\", "_")
         return sanitized.strip()
 
-    def get_effective_folder_name(self, category: str) -> str:
-        default_name = self.default_folder_names.get(category, category)
-        if not self.enable_custom_folder_names_checkbox.isChecked():
-            return default_name
-
-        edit = self.custom_folder_name_edits.get(category)
-        if edit is None:
-            return default_name
-
-        custom_name = self.sanitize_folder_name(edit.text())
-        return custom_name or default_name
-
-    def update_custom_folder_name_state(self):
-        enabled = self.enable_custom_folder_names_checkbox.isChecked()
-        self.custom_folder_names_group.setEnabled(enabled)
-        self.custom_folder_names_group.setVisible(enabled)
-        self.custom_folder_names_toggle_button.setEnabled(enabled)
-        self.custom_folder_names_content.setVisible(enabled and self.custom_folder_names_expanded)
-        self.custom_folder_names_toggle_button.setArrowType(
-            Qt.ArrowType.DownArrow if self.custom_folder_names_expanded else Qt.ArrowType.RightArrow
+    def load_ui_settings(self):
+        self.enable_year_folder_checkbox.setChecked(
+            self.settings.value("date_structure/year_folder", False, type=bool)
         )
-        tooltip = "Custom folder names are enabled." if enabled else "Enable custom folder names to edit target folder names."
-        self.custom_folder_names_group.setToolTip(tooltip)
-        for category, edit in self.custom_folder_name_edits.items():
-            edit.setEnabled(enabled)
-            edit.setToolTip(
-                f"Custom folder name for {category}" if enabled else "Enable custom folder names to edit this field."
+        self.enable_month_folder_checkbox.setChecked(
+            self.settings.value("date_structure/month_folder", False, type=bool)
+        )
+
+        selected_date_format = self.settings.value("date_format/pattern", "%Y-%m-%d", type=str)
+        selected_date_index = 0
+        for index, (_, pattern) in enumerate(self.date_format_options):
+            if pattern == selected_date_format:
+                selected_date_index = index
+                break
+        self.date_format_combo.setCurrentIndex(selected_date_index)
+
+        type_sorting_enabled = self.settings.value("type_sorting/enabled", False, type=bool)
+        self.type_rules_expanded = self.settings.value("type_rules/expanded", True, type=bool)
+        self.enable_type_sorting_checkbox.setChecked(type_sorting_enabled)
+        self.type_rules_toggle_button.setChecked(self.type_rules_expanded)
+
+        saved_rules_raw = self.settings.value("type_rules/items", "", type=str)
+        if not saved_rules_raw:
+            saved_rules_raw = self.settings.value("custom_type_rules/items", "[]", type=str)
+        try:
+            saved_rules = json.loads(saved_rules_raw)
+        except json.JSONDecodeError:
+            saved_rules = []
+
+        if isinstance(saved_rules, list):
+            for rule in saved_rules:
+                if not isinstance(rule, dict):
+                    continue
+                folder_name = str(rule.get("folder_name", "")).strip()
+                matcher = str(rule.get("matcher", "extension"))
+                extensions = rule.get("extensions", [])
+                if isinstance(extensions, list):
+                    normalized_extensions = [
+                        self.normalize_extension(str(ext))
+                        for ext in extensions
+                        if self.normalize_extension(str(ext))
+                    ]
+                    extensions_text = ", ".join(normalized_extensions)
+                else:
+                    extensions_text = str(extensions)
+
+                rule_id = str(rule.get("id", ""))
+                description = str(rule.get("description", ""))
+                removable = bool(rule.get("removable", True))
+                self.add_type_rule_row(
+                    rule_id=rule_id,
+                    folder_name=folder_name,
+                    extensions=extensions_text,
+                    description=description,
+                    matcher=matcher,
+                    removable=removable,
+                )
+        else:
+            self.load_legacy_type_rules()
+
+    def load_legacy_type_rules(self):
+        for rule in self.default_type_rules:
+            saved_folder_name = self.settings.value(
+                f"custom_folder_names/{rule['id']}",
+                rule["folder_name"],
+                type=str,
+            )
+            extensions = list(rule["extensions"])
+            if rule["id"] == "Insta360":
+                saved_database_name = self.settings.value("custom_folder_names/Database", "", type=str).strip()
+                if saved_database_name and saved_database_name == saved_folder_name and ".db" not in extensions:
+                    extensions.append(".db")
+            self.add_type_rule_row(
+                rule_id=rule["id"],
+                folder_name=saved_folder_name,
+                extensions=", ".join(extensions),
+                description=rule["description"],
+                matcher=rule["matcher"],
+                removable=rule["removable"],
             )
 
-    def toggle_custom_folder_names_section(self):
-        self.custom_folder_names_expanded = self.custom_folder_names_toggle_button.isChecked()
-        self.update_custom_folder_name_state()
-        self.save_ui_settings()
+        saved_rules_raw = self.settings.value("custom_type_rules/items", "[]", type=str)
+        try:
+            saved_rules = json.loads(saved_rules_raw)
+        except json.JSONDecodeError:
+            saved_rules = []
 
-    def load_ui_settings(self):
-        custom_enabled = self.settings.value("custom_folder_names/enabled", False, type=bool)
-        self.custom_folder_names_expanded = self.settings.value("custom_folder_names/expanded", True, type=bool)
-        self.custom_folder_names_toggle_button.setChecked(self.custom_folder_names_expanded)
-        self.enable_custom_folder_names_checkbox.setChecked(custom_enabled)
+        if not isinstance(saved_rules, list):
+            return
 
-        for category, default_name in self.default_folder_names.items():
-            saved_name = self.settings.value(f"custom_folder_names/{category}", default_name, type=str)
-            edit = self.custom_folder_name_edits.get(category)
-            if edit is not None:
-                edit.setText(saved_name)
+        for rule in saved_rules:
+            if not isinstance(rule, dict):
+                continue
+            folder_name = str(rule.get("folder_name", "")).strip()
+            extensions = rule.get("extensions", [])
+            if isinstance(extensions, list):
+                extensions_text = ", ".join(
+                    self.normalize_extension(str(ext))
+                    for ext in extensions
+                    if self.normalize_extension(str(ext))
+                )
+            else:
+                extensions_text = str(extensions)
+            self.add_type_rule_row(folder_name=folder_name, extensions=extensions_text, description="custom rule")
 
     def save_ui_settings(self):
-        self.settings.setValue(
-            "custom_folder_names/enabled",
-            self.enable_custom_folder_names_checkbox.isChecked()
-        )
-        self.settings.setValue("custom_folder_names/expanded", self.custom_folder_names_expanded)
-        for category, edit in self.custom_folder_name_edits.items():
-            self.settings.setValue(f"custom_folder_names/{category}", edit.text())
+        self.settings.setValue("date_structure/year_folder", self.enable_year_folder_checkbox.isChecked())
+        self.settings.setValue("date_structure/month_folder", self.enable_month_folder_checkbox.isChecked())
+        self.settings.setValue("date_format/pattern", self.get_selected_date_format())
+        self.settings.setValue("type_sorting/enabled", self.enable_type_sorting_checkbox.isChecked())
+        self.settings.setValue("type_rules/expanded", self.type_rules_expanded)
+        custom_rules_payload = [
+            {
+                "id": rule["id"],
+                "folder_name": rule["folder_name"],
+                "extensions": rule["extensions"],
+                "matcher": rule["matcher"],
+            }
+            for rule in self.get_type_rules()
+        ]
+        self.settings.setValue("type_rules/items", json.dumps(custom_rules_payload, ensure_ascii=True))
 
     # pano rule
     def get_destination_folder(self, date: str, filename: str) -> str:
-        base = os.path.join(self.folder_path, date)
-        file_lower = filename.lower()
-
-        if file_lower.endswith(".db"):
-            return base
-        if file_lower.endswith(".srt"):
-            return os.path.join(base, self.get_effective_folder_name("Video"))
+        base = os.path.join(self.folder_path, *self.build_date_path_parts(date))
 
         if self.enable_type_sorting_checkbox.isChecked():
             source_path = os.path.join(self.folder_path, filename)
-            is_pano = self.has_pano_tag(source_path)
-            if is_pano:
-                category = "Pano"
-            else:
-                category = self.get_file_type(filename)
-            return os.path.join(base, self.get_effective_folder_name(category))
+            folder_name = self.get_matching_rule_folder_name(filename, source_path)
+            return os.path.join(base, folder_name)
         return base
 
     def get_undo_log_path(self) -> str:
@@ -762,9 +1123,9 @@ class FileSorterApp(QMainWindow):
         if name.endswith(".dng"):
             return "Raw"
 
-        # Database
+        # Insta360 helper database files
         if name.endswith(".db"):
-            return "Database"
+            return "Insta360"
 
         return "Other"
 
