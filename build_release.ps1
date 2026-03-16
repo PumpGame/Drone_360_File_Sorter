@@ -1,7 +1,9 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Write-Host "== Drone360FileSorter: build release =="
+$appName = "MediaFileSorter"
+
+Write-Host "== ${appName}: build release =="
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
@@ -33,7 +35,7 @@ foreach ($dir in @("build", "dist")) {
     }
 }
 
-$specPath = Join-Path $repoRoot "Drone360FileSorter.spec"
+$specPath = Join-Path $repoRoot "$appName.spec"
 if (Test-Path $specPath) {
     Write-Host "Removing old spec file..."
     Remove-Item -Path $specPath -Force
@@ -48,7 +50,7 @@ Write-Host "Building onefile EXE with PyInstaller..."
 $mainPyPath = Join-Path $repoRoot "main.py"
 $mainHash = Get-FileHash -Path $mainPyPath -Algorithm SHA256
 Write-Host "main.py SHA256: $($mainHash.Hash)"
-& $PY -m PyInstaller --clean --onefile --windowed --name "Drone360FileSorter" --icon $iconPath --add-data "$iconPath;." main.py
+& $PY -m PyInstaller --clean --onefile --windowed --name $appName --icon $iconPath --add-data "$iconPath;." main.py
 
 $releaseDir = Join-Path $repoRoot "release"
 if (-not (Test-Path $releaseDir)) {
@@ -66,18 +68,18 @@ if (Test-Path $versionFile) {
     $version = Get-Date -Format "yyyyMMdd_HHmm"
 }
 
-$builtExe = Join-Path $repoRoot "dist\Drone360FileSorter.exe"
+$builtExe = Join-Path $repoRoot "dist\$appName.exe"
 if (-not (Test-Path $builtExe)) {
     throw "Build output not found: $builtExe"
 }
 
-$releaseExeName = "Drone360FileSorter_{0}.exe" -f $version
+$releaseExeName = "{0}_{1}.exe" -f $appName, $version
 $releaseExePath = Join-Path $releaseDir $releaseExeName
 
 Write-Host "Copying EXE to release..."
 Copy-Item -Path $builtExe -Destination $releaseExePath -Force
 
-$zipName = "Drone360FileSorter_{0}_win64.zip" -f $version
+$zipName = "{0}_{1}_win64.zip" -f $appName, $version
 $zipPath = Join-Path $releaseDir $zipName
 if (Test-Path $zipPath) {
     Remove-Item -Path $zipPath -Force
@@ -87,7 +89,7 @@ Write-Host "Creating ZIP package..."
 Compress-Archive -Path $releaseExePath -DestinationPath $zipPath -Force
 
 $hash = Get-FileHash -Path $zipPath -Algorithm SHA256
-$shaName = "Drone360FileSorter_{0}_win64_SHA256.txt" -f $version
+$shaName = "{0}_{1}_win64_SHA256.txt" -f $appName, $version
 $shaPath = Join-Path $releaseDir $shaName
 $shaContent = "{0}  {1}" -f $hash.Hash, (Split-Path $zipPath -Leaf)
 Set-Content -Path $shaPath -Value $shaContent -Encoding ASCII
