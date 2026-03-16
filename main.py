@@ -2,11 +2,12 @@ import sys
 import os
 import json
 import shutil
+import hashlib
 from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle,
-    QLineEdit, QToolButton, QComboBox, QSplitter, QSizePolicy
+    QLineEdit, QToolButton, QComboBox, QSplitter, QSizePolicy, QInputDialog
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
@@ -29,10 +30,16 @@ def resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 
+def app_base_path() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 class FileSorterApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("File Sorter by Modified Date")
+        self.setWindowTitle("Media File Sorter")
         self.setWindowIcon(QIcon(resource_path("icon.ico")))
 
         self.folder_path = ""
@@ -42,6 +49,7 @@ class FileSorterApp(QMainWindow):
         self.settings = QSettings("Drone360", "FileSorter")
         self.recent_folders: list[str] = []
         self.max_recent_folders = 8
+        self.saved_presets: dict[str, dict[str, object]] = {}
         self.ignored_system_files = {
             "desktop.ini",
             "thumbs.db",
@@ -67,6 +75,36 @@ class FileSorterApp(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         self.central_widget.setLayout(layout)
+
+        header_widget = QWidget()
+        header_layout = QVBoxLayout()
+        header_layout.setContentsMargins(4, 2, 4, 4)
+        header_layout.setSpacing(1)
+        header_widget.setLayout(header_layout)
+        layout.addWidget(header_widget)
+
+        self.header_title_label = QLabel("Media File Sorter")
+        self.header_title_label.setObjectName("headerTitle")
+        header_layout.addWidget(self.header_title_label)
+
+        self.header_subtitle_label = QLabel('by <a href="https://github.com/PumpGame">PumpGame</a>')
+        self.header_subtitle_label.setObjectName("headerSubtitle")
+        self.header_subtitle_label.setOpenExternalLinks(True)
+        self.header_subtitle_label.setTextFormat(Qt.TextFormat.RichText)
+        self.header_subtitle_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        header_layout.addWidget(self.header_subtitle_label)
+
+        self.header_description_label = QLabel(
+            "Organize drone, Insta360, camera, and archive files by date and type."
+        )
+        self.header_description_label.setObjectName("headerDescription")
+        header_layout.addWidget(self.header_description_label)
+
+        header_separator = QFrame()
+        header_separator.setObjectName("headerSeparator")
+        header_separator.setFrameShape(QFrame.Shape.HLine)
+        header_separator.setFrameShadow(QFrame.Shadow.Plain)
+        header_layout.addWidget(header_separator)
 
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter.setChildrenCollapsible(False)
@@ -107,10 +145,11 @@ class FileSorterApp(QMainWindow):
         self.recent_folders_combo.setToolTip("Quickly reopen one of the recently used folders")
         source_controls_layout.addWidget(self.recent_folders_combo, 1)
 
-        self.clear_recent_folders_button = QPushButton("Clear")
-        self.clear_recent_folders_button.setProperty("class", "secondary")
-        self.clear_recent_folders_button.clicked.connect(self.clear_recent_folders)
-        source_controls_layout.addWidget(self.clear_recent_folders_button)
+        self.open_current_folder_button = QPushButton("Open Current Folder")
+        self.open_current_folder_button.setProperty("class", "secondary")
+        self.open_current_folder_button.clicked.connect(self.open_current_folder)
+        self.open_current_folder_button.setEnabled(False)
+        source_controls_layout.addWidget(self.open_current_folder_button)
 
         # Options section
         options_group = QGroupBox("Options")
@@ -121,6 +160,42 @@ class FileSorterApp(QMainWindow):
         options_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         left_panel_layout.addWidget(options_group)
         left_panel_layout.addStretch()
+
+        self.presets_group = QGroupBox("Presets")
+        presets_layout = QVBoxLayout()
+        presets_layout.setContentsMargins(10, 10, 10, 10)
+        presets_layout.setSpacing(8)
+        self.presets_group.setLayout(presets_layout)
+        options_layout.addWidget(self.presets_group)
+
+        self.presets_combo = QComboBox()
+        self.presets_combo.addItem("Saved presets...", "")
+        presets_layout.addWidget(self.presets_combo)
+
+        presets_actions_layout = QHBoxLayout()
+        presets_actions_layout.setContentsMargins(0, 0, 0, 0)
+        presets_actions_layout.setSpacing(8)
+        presets_layout.addLayout(presets_actions_layout)
+
+        self.load_preset_button = QPushButton("Load")
+        self.load_preset_button.setProperty("class", "secondary")
+        self.load_preset_button.clicked.connect(self.load_selected_preset)
+        presets_actions_layout.addWidget(self.load_preset_button)
+
+        self.new_preset_button = QPushButton("New Preset")
+        self.new_preset_button.setProperty("class", "secondary")
+        self.new_preset_button.clicked.connect(self.save_preset_as)
+        presets_actions_layout.addWidget(self.new_preset_button)
+
+        self.save_preset_button = QPushButton("Save")
+        self.save_preset_button.setProperty("class", "secondary")
+        self.save_preset_button.clicked.connect(self.save_selected_preset)
+        presets_actions_layout.addWidget(self.save_preset_button)
+
+        self.delete_preset_button = QPushButton("Delete")
+        self.delete_preset_button.setProperty("class", "secondary")
+        self.delete_preset_button.clicked.connect(self.delete_selected_preset)
+        presets_actions_layout.addWidget(self.delete_preset_button)
 
         self.date_structure_group = QGroupBox("Date Structure")
         date_structure_layout = QVBoxLayout()
@@ -185,11 +260,11 @@ class FileSorterApp(QMainWindow):
 
         # Tooltip on the checkbox
         self.enable_type_sorting_checkbox.setToolTip(
-            f"Sortowanie po rozszerzeniach plikow: {formats_txt}"
+            f"Sort files by extension: {formats_txt}"
         )
 
         # Small label under the checkbox (always visible)
-        self.type_sorting_desc = QLabel("Sortowanie po rozszerzeniach, np. .jpg, .mp4, .insv")
+        self.type_sorting_desc = QLabel("Sort by extension, e.g. .jpg, .mp4, .insv")
         self.type_sorting_desc.setObjectName("typeSortingDesc")
         options_layout.addWidget(self.type_sorting_desc)
 
@@ -314,12 +389,14 @@ class FileSorterApp(QMainWindow):
         if not os.path.isdir(normalized_path):
             QMessageBox.warning(self, "Error", "The selected path is not a valid folder.")
             self.set_status("Invalid folder selected")
+            self.update_open_current_folder_button()
             return
 
         self.folder_path = normalized_path
         self._keywords_cache.clear()
         self.folder_label.setText(f"Selected Folder: {normalized_path}")
         self.add_recent_folder(normalized_path)
+        self.update_open_current_folder_button()
         self.set_status(status_text)
         self.list_files()
         self.update_undo_button_state()
@@ -343,7 +420,6 @@ class FileSorterApp(QMainWindow):
             self.recent_folders_combo.setItemData(index, folder_path, Qt.ItemDataRole.ToolTipRole)
         self.recent_folders_combo.setCurrentIndex(0)
         self.recent_folders_combo.setEnabled(bool(self.recent_folders))
-        self.clear_recent_folders_button.setEnabled(bool(self.recent_folders))
         self.recent_folders_combo.blockSignals(False)
 
     def on_recent_folder_selected(self, index: int) -> None:
@@ -358,11 +434,19 @@ class FileSorterApp(QMainWindow):
             return
         self.set_folder(folder_path, "Recent folder loaded")
 
-    def clear_recent_folders(self) -> None:
-        self.recent_folders = []
-        self.refresh_recent_folders_combo()
-        self.save_ui_settings()
-        self.set_status("Recent folder history cleared", 4000)
+    def open_current_folder(self) -> None:
+        if not self.folder_path or not os.path.isdir(self.folder_path):
+            QMessageBox.information(self, "Open folder", "No valid current folder is selected.")
+            self.update_open_current_folder_button()
+            return
+        try:
+            os.startfile(self.folder_path)
+            self.set_status("Opened current folder", 3000)
+        except OSError as exc:
+            QMessageBox.warning(self, "Open folder", f"Could not open folder:\n{exc}")
+
+    def update_open_current_folder_button(self) -> None:
+        self.open_current_folder_button.setEnabled(bool(self.folder_path and os.path.isdir(self.folder_path)))
 
     def list_files(self):
         self.destination_tree.clear()
@@ -841,6 +925,124 @@ class FileSorterApp(QMainWindow):
                 widget.deleteLater()
         self.custom_type_rule_rows = []
 
+    def serialize_current_settings(self) -> dict[str, object]:
+        return {
+            "year_folder": self.enable_year_folder_checkbox.isChecked(),
+            "month_folder": self.enable_month_folder_checkbox.isChecked(),
+            "date_format": self.get_selected_date_format(),
+            "type_sorting_enabled": self.enable_type_sorting_checkbox.isChecked(),
+            "type_rules_expanded": self.type_rules_expanded,
+            "type_rules": self.get_type_rules(),
+        }
+
+    def apply_settings_payload(self, payload: dict[str, object]) -> None:
+        self._settings_updates_paused = True
+        self.enable_year_folder_checkbox.setChecked(bool(payload.get("year_folder", False)))
+        self.enable_month_folder_checkbox.setChecked(bool(payload.get("month_folder", False)))
+
+        selected_date_format = str(payload.get("date_format", "%Y-%m-%d"))
+        selected_date_index = 0
+        for index, (_, pattern) in enumerate(self.date_format_options):
+            if pattern == selected_date_format:
+                selected_date_index = index
+                break
+        self.date_format_combo.setCurrentIndex(selected_date_index)
+
+        self.enable_type_sorting_checkbox.setChecked(bool(payload.get("type_sorting_enabled", False)))
+        self.type_rules_expanded = bool(payload.get("type_rules_expanded", True))
+        self.type_rules_toggle_button.setChecked(self.type_rules_expanded)
+
+        self.clear_type_rule_rows()
+        raw_rules = payload.get("type_rules", [])
+        rules = raw_rules if isinstance(raw_rules, list) else []
+        merged_rules = self.merge_missing_default_rules(rules)
+        for rule in merged_rules:
+            if not isinstance(rule, dict):
+                continue
+            self.add_type_rule_row(
+                rule_id=str(rule.get("id", "")),
+                folder_name=str(rule.get("folder_name", "")).strip(),
+                extensions=", ".join(
+                    [
+                        self.normalize_extension(str(ext))
+                        for ext in rule.get("extensions", [])
+                        if self.normalize_extension(str(ext))
+                    ]
+                ) if isinstance(rule.get("extensions", []), list) else str(rule.get("extensions", "")),
+                description=str(rule.get("description", "")),
+                matcher=str(rule.get("matcher", "extension")),
+                removable=bool(rule.get("removable", True)),
+            )
+
+        self._settings_updates_paused = False
+        self.refresh_type_sorting_description()
+        self.update_type_rules_state()
+        self.save_ui_settings()
+        self.update_preview()
+
+    def refresh_presets_combo(self) -> None:
+        self.presets_combo.blockSignals(True)
+        self.presets_combo.clear()
+        self.presets_combo.addItem("Saved presets...", "")
+        for preset_name in sorted(self.saved_presets.keys(), key=str.lower):
+            self.presets_combo.addItem(preset_name, preset_name)
+        has_presets = bool(self.saved_presets)
+        self.presets_combo.setCurrentIndex(0)
+        self.presets_combo.setEnabled(has_presets)
+        self.load_preset_button.setEnabled(has_presets)
+        self.save_preset_button.setEnabled(has_presets)
+        self.delete_preset_button.setEnabled(has_presets)
+        self.presets_combo.blockSignals(False)
+
+    def save_preset_as(self) -> None:
+        preset_name, accepted = QInputDialog.getText(self, "Save preset", "Preset name:")
+        preset_name = preset_name.strip()
+        if not accepted or not preset_name:
+            return
+        self.saved_presets[preset_name] = self.serialize_current_settings()
+        self.refresh_presets_combo()
+        index = self.presets_combo.findData(preset_name)
+        if index >= 0:
+            self.presets_combo.setCurrentIndex(index)
+        self.save_ui_settings()
+        self.set_status(f"Preset saved: {preset_name}", 4000)
+
+    def load_selected_preset(self) -> None:
+        preset_name = self.presets_combo.currentData()
+        if not isinstance(preset_name, str) or not preset_name:
+            return
+        payload = self.saved_presets.get(preset_name)
+        if not isinstance(payload, dict):
+            return
+        self.apply_settings_payload(payload)
+        self.set_status(f"Preset loaded: {preset_name}", 4000)
+
+    def save_selected_preset(self) -> None:
+        preset_name = self.presets_combo.currentData()
+        if not isinstance(preset_name, str) or not preset_name:
+            QMessageBox.information(self, "Save preset", "Select a preset first or create one with 'New Preset'.")
+            return
+        self.saved_presets[preset_name] = self.serialize_current_settings()
+        self.save_ui_settings()
+        self.set_status(f"Preset updated: {preset_name}", 4000)
+
+    def delete_selected_preset(self) -> None:
+        preset_name = self.presets_combo.currentData()
+        if not isinstance(preset_name, str) or not preset_name:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Delete preset",
+            f"Delete preset '{preset_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.saved_presets.pop(preset_name, None)
+        self.refresh_presets_combo()
+        self.save_ui_settings()
+        self.set_status(f"Preset deleted: {preset_name}", 4000)
+
     def apply_default_settings(self, save: bool = True):
         self._settings_updates_paused = True
         self.enable_year_folder_checkbox.setChecked(False)
@@ -912,9 +1114,9 @@ class FileSorterApp(QMainWindow):
                     seen.add(ext)
 
         formats_txt = ", ".join(extensions) if extensions else "(no extensions configured)"
-        examples = ", ".join(extensions[:3]) if extensions else "brak"
-        short_description = f"Sortowanie po rozszerzeniach, np. {examples}"
-        tooltip = f"Sortowanie po rozszerzeniach plikow: {formats_txt}"
+        examples = ", ".join(extensions[:3]) if extensions else "none"
+        short_description = f"Sort by extension, e.g. {examples}"
+        tooltip = f"Sort files by extension: {formats_txt}"
         self.type_sorting_desc.setText(short_description)
         self.enable_type_sorting_checkbox.setToolTip(tooltip)
 
@@ -1099,6 +1301,12 @@ class FileSorterApp(QMainWindow):
     def load_ui_settings(self):
         self._settings_updates_paused = True
         self.clear_type_rule_rows()
+        presets_raw = self.settings.value("presets/items", "{}", type=str)
+        try:
+            loaded_presets = json.loads(presets_raw)
+        except json.JSONDecodeError:
+            loaded_presets = {}
+        self.saved_presets = loaded_presets if isinstance(loaded_presets, dict) else {}
         recent_folders_raw = self.settings.value("folders/recent", "[]", type=str)
         try:
             loaded_recent_folders = json.loads(recent_folders_raw)
@@ -1174,6 +1382,7 @@ class FileSorterApp(QMainWindow):
             self.load_legacy_type_rules()
 
         self._settings_updates_paused = False
+        self.refresh_presets_combo()
         self.refresh_recent_folders_combo()
         if not self.custom_type_rule_rows:
             self.apply_default_settings(save=False)
@@ -1235,6 +1444,7 @@ class FileSorterApp(QMainWindow):
         self.settings.setValue("type_sorting/enabled", self.enable_type_sorting_checkbox.isChecked())
         self.settings.setValue("type_rules/expanded", self.type_rules_expanded)
         self.settings.setValue("folders/recent", json.dumps(self.recent_folders, ensure_ascii=True))
+        self.settings.setValue("presets/items", json.dumps(self.saved_presets, ensure_ascii=True))
         custom_rules_payload = [
             {
                 "id": rule["id"],
@@ -1259,7 +1469,11 @@ class FileSorterApp(QMainWindow):
     def get_undo_log_path(self) -> str:
         if not self.folder_path:
             return ""
-        return os.path.join(self.folder_path, "_sorter_undo_last.json")
+        source_root = os.path.abspath(self.folder_path)
+        source_hash = hashlib.sha1(source_root.encode("utf-8")).hexdigest()[:12]
+        logs_dir = os.path.join(app_base_path(), "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        return os.path.join(logs_dir, f"undo_{source_hash}.json")
 
     def load_last_run_log(self) -> dict:
         log_path = self.get_undo_log_path()
@@ -1363,6 +1577,33 @@ class FileSorterApp(QMainWindow):
         app.setPalette(palette)
 
         qss = """
+        QLabel#headerTitle {
+            color: #f4f7fb;
+            font-size: 21px;
+            font-weight: 700;
+            padding: 2px 0 0 0;
+        }
+        QLabel#headerSubtitle {
+            color: #8b96a3;
+            font-size: 11px;
+            font-weight: 400;
+            padding: 0 0 1px 0;
+        }
+        QLabel#headerSubtitle:hover {
+            color: #9fb2ca;
+        }
+        QLabel#headerDescription {
+            color: #b8b8b8;
+            font-size: 11px;
+            padding: 1px 0 6px 0;
+        }
+        QFrame#headerSeparator {
+            color: #404040;
+            background-color: #404040;
+            max-height: 1px;
+            min-height: 1px;
+            border: none;
+        }
         QGroupBox {
             border: 1px solid #4a4a4a;
             border-radius: 8px;
