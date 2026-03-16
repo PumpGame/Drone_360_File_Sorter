@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QSettings
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QWidget, QCheckBox, QGroupBox, QFrame, QStatusBar, QStyle,
-    QLineEdit, QToolButton, QComboBox
+    QLineEdit, QToolButton, QComboBox, QSplitter, QSizePolicy
 )
 from PySide6.QtGui import QColor, QPalette, QIcon
 from datetime import datetime
@@ -82,13 +82,26 @@ class FileSorterApp(QMainWindow):
         self.choose_folder_button.setProperty("class", "secondary")
         source_layout.addWidget(self.choose_folder_button)
 
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.content_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.content_splitter, 1)
+
+        left_panel = QWidget()
+        left_panel_layout = QVBoxLayout()
+        left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel_layout.setSpacing(0)
+        left_panel.setLayout(left_panel_layout)
+        self.content_splitter.addWidget(left_panel)
+
         # Options section
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
         options_layout.setContentsMargins(10, 10, 10, 10)
         options_layout.setSpacing(8)
         options_group.setLayout(options_layout)
-        layout.addWidget(options_group)
+        options_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        left_panel_layout.addWidget(options_group)
+        left_panel_layout.addStretch()
 
         self.date_structure_group = QGroupBox("Date Structure")
         date_structure_layout = QVBoxLayout()
@@ -153,11 +166,11 @@ class FileSorterApp(QMainWindow):
 
         # Tooltip on the checkbox
         self.enable_type_sorting_checkbox.setToolTip(
-            f"Sortuje po typie pliku: {formats_txt}"
+            f"Sortowanie po rozszerzeniach plikow: {formats_txt}"
         )
 
         # Small label under the checkbox (always visible)
-        self.type_sorting_desc = QLabel(f"Sortuje po typie pliku: {formats_txt}")
+        self.type_sorting_desc = QLabel("Sortowanie po rozszerzeniach, np. .jpg, .mp4, .insv")
         self.type_sorting_desc.setObjectName("typeSortingDesc")
         options_layout.addWidget(self.type_sorting_desc)
 
@@ -226,7 +239,10 @@ class FileSorterApp(QMainWindow):
         preview_layout.setContentsMargins(10, 10, 10, 10)
         preview_layout.setSpacing(8)
         preview_group.setLayout(preview_layout)
-        layout.addWidget(preview_group)
+        self.content_splitter.addWidget(preview_group)
+        self.content_splitter.setStretchFactor(0, 0)
+        self.content_splitter.setStretchFactor(1, 1)
+        self.content_splitter.setSizes([420, 680])
 
         self.destination_tree = QTreeWidget()
         self.destination_tree.setHeaderLabel("Destination structure")
@@ -821,9 +837,11 @@ class FileSorterApp(QMainWindow):
                     seen.add(ext)
 
         formats_txt = ", ".join(extensions) if extensions else "(no extensions configured)"
-        description = f"Sortuje po typie pliku: {formats_txt}"
-        self.type_sorting_desc.setText(description)
-        self.enable_type_sorting_checkbox.setToolTip(description)
+        examples = ", ".join(extensions[:3]) if extensions else "brak"
+        short_description = f"Sortowanie po rozszerzeniach, np. {examples}"
+        tooltip = f"Sortowanie po rozszerzeniach plikow: {formats_txt}"
+        self.type_sorting_desc.setText(short_description)
+        self.enable_type_sorting_checkbox.setToolTip(tooltip)
 
     def update_type_rules_state(self):
         enabled = self.enable_type_sorting_checkbox.isChecked()
