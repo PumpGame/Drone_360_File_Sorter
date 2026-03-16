@@ -40,6 +40,8 @@ class FileSorterApp(QMainWindow):
         self._keywords_cache: dict[str, list[str]] = {}
         self._settings_updates_paused = False
         self.settings = QSettings("Drone360", "FileSorter")
+        self.recent_folders: list[str] = []
+        self.max_recent_folders = 8
         self.ignored_system_files = {
             "desktop.ini",
             "thumbs.db",
@@ -66,22 +68,6 @@ class FileSorterApp(QMainWindow):
         layout.setSpacing(10)
         self.central_widget.setLayout(layout)
 
-        # Source section
-        source_group = QGroupBox("Source")
-        source_layout = QVBoxLayout()
-        source_layout.setContentsMargins(10, 10, 10, 10)
-        source_layout.setSpacing(8)
-        source_group.setLayout(source_layout)
-        layout.addWidget(source_group)
-
-        self.folder_label = QLabel("Selected Folder: None")
-        source_layout.addWidget(self.folder_label)
-
-        self.choose_folder_button = QPushButton("Choose Folder")
-        self.choose_folder_button.clicked.connect(self.choose_folder)
-        self.choose_folder_button.setProperty("class", "secondary")
-        source_layout.addWidget(self.choose_folder_button)
-
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter.setChildrenCollapsible(False)
         layout.addWidget(self.content_splitter, 1)
@@ -89,9 +75,42 @@ class FileSorterApp(QMainWindow):
         left_panel = QWidget()
         left_panel_layout = QVBoxLayout()
         left_panel_layout.setContentsMargins(0, 0, 0, 0)
-        left_panel_layout.setSpacing(0)
+        left_panel_layout.setSpacing(10)
         left_panel.setLayout(left_panel_layout)
         self.content_splitter.addWidget(left_panel)
+
+        # Source section
+        source_group = QGroupBox("Source")
+        source_layout = QVBoxLayout()
+        source_layout.setContentsMargins(10, 10, 10, 10)
+        source_layout.setSpacing(8)
+        source_group.setLayout(source_layout)
+        source_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        left_panel_layout.addWidget(source_group)
+
+        self.folder_label = QLabel("Selected Folder: None")
+        source_layout.addWidget(self.folder_label)
+
+        source_controls_layout = QHBoxLayout()
+        source_controls_layout.setContentsMargins(0, 0, 0, 0)
+        source_controls_layout.setSpacing(8)
+        source_layout.addLayout(source_controls_layout)
+
+        self.choose_folder_button = QPushButton("Choose Folder")
+        self.choose_folder_button.clicked.connect(self.choose_folder)
+        self.choose_folder_button.setProperty("class", "secondary")
+        source_controls_layout.addWidget(self.choose_folder_button)
+
+        self.recent_folders_combo = QComboBox()
+        self.recent_folders_combo.addItem("Recent folders...", "")
+        self.recent_folders_combo.activated.connect(self.on_recent_folder_selected)
+        self.recent_folders_combo.setToolTip("Quickly reopen one of the recently used folders")
+        source_controls_layout.addWidget(self.recent_folders_combo, 1)
+
+        self.clear_recent_folders_button = QPushButton("Clear")
+        self.clear_recent_folders_button.setProperty("class", "secondary")
+        self.clear_recent_folders_button.clicked.connect(self.clear_recent_folders)
+        source_controls_layout.addWidget(self.clear_recent_folders_button)
 
         # Options section
         options_group = QGroupBox("Options")
@@ -280,14 +299,70 @@ class FileSorterApp(QMainWindow):
         self.set_status("Ready")
 
     def choose_folder(self):
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
+        start_dir = self.folder_path
+        if not start_dir and self.recent_folders:
+            start_dir = self.recent_folders[0]
+        if start_dir and not os.path.isdir(start_dir):
+            start_dir = ""
+
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", start_dir)
         if folder_path:
-            self.folder_path = folder_path
-            self._keywords_cache.clear()
-            self.folder_label.setText(f"Selected Folder: {folder_path}")
-            self.set_status("Folder selected")
-            self.list_files()
-            self.update_undo_button_state()
+            self.set_folder(folder_path)
+
+    def set_folder(self, folder_path: str, status_text: str = "Folder selected") -> None:
+        normalized_path = os.path.abspath(folder_path)
+        if not os.path.isdir(normalized_path):
+            QMessageBox.warning(self, "Error", "The selected path is not a valid folder.")
+            self.set_status("Invalid folder selected")
+            return
+
+        self.folder_path = normalized_path
+        self._keywords_cache.clear()
+        self.folder_label.setText(f"Selected Folder: {normalized_path}")
+        self.add_recent_folder(normalized_path)
+        self.set_status(status_text)
+        self.list_files()
+        self.update_undo_button_state()
+
+    def add_recent_folder(self, folder_path: str) -> None:
+        normalized_path = os.path.abspath(folder_path)
+        self.recent_folders = [path for path in self.recent_folders if path != normalized_path]
+        self.recent_folders.insert(0, normalized_path)
+        self.recent_folders = self.recent_folders[:self.max_recent_folders]
+        self.refresh_recent_folders_combo()
+        self.save_ui_settings()
+
+    def refresh_recent_folders_combo(self) -> None:
+        self.recent_folders_combo.blockSignals(True)
+        self.recent_folders_combo.clear()
+        self.recent_folders_combo.addItem("Recent folders...", "")
+        for folder_path in self.recent_folders:
+            label = os.path.basename(os.path.normpath(folder_path)) or folder_path
+            self.recent_folders_combo.addItem(label, folder_path)
+            index = self.recent_folders_combo.count() - 1
+            self.recent_folders_combo.setItemData(index, folder_path, Qt.ItemDataRole.ToolTipRole)
+        self.recent_folders_combo.setCurrentIndex(0)
+        self.recent_folders_combo.setEnabled(bool(self.recent_folders))
+        self.clear_recent_folders_button.setEnabled(bool(self.recent_folders))
+        self.recent_folders_combo.blockSignals(False)
+
+    def on_recent_folder_selected(self, index: int) -> None:
+        folder_path = self.recent_folders_combo.itemData(index)
+        if not isinstance(folder_path, str) or not folder_path:
+            return
+        if not os.path.isdir(folder_path):
+            QMessageBox.warning(self, "Folder missing", f"Folder no longer exists:\n{folder_path}")
+            self.recent_folders = [path for path in self.recent_folders if path != folder_path]
+            self.refresh_recent_folders_combo()
+            self.save_ui_settings()
+            return
+        self.set_folder(folder_path, "Recent folder loaded")
+
+    def clear_recent_folders(self) -> None:
+        self.recent_folders = []
+        self.refresh_recent_folders_combo()
+        self.save_ui_settings()
+        self.set_status("Recent folder history cleared", 4000)
 
     def list_files(self):
         self.destination_tree.clear()
@@ -1024,6 +1099,20 @@ class FileSorterApp(QMainWindow):
     def load_ui_settings(self):
         self._settings_updates_paused = True
         self.clear_type_rule_rows()
+        recent_folders_raw = self.settings.value("folders/recent", "[]", type=str)
+        try:
+            loaded_recent_folders = json.loads(recent_folders_raw)
+        except json.JSONDecodeError:
+            loaded_recent_folders = []
+        if isinstance(loaded_recent_folders, list):
+            self.recent_folders = [
+                os.path.abspath(str(path))
+                for path in loaded_recent_folders
+                if isinstance(path, str) and str(path).strip()
+            ][:self.max_recent_folders]
+        else:
+            self.recent_folders = []
+
         self.enable_year_folder_checkbox.setChecked(
             self.settings.value("date_structure/year_folder", False, type=bool)
         )
@@ -1085,6 +1174,7 @@ class FileSorterApp(QMainWindow):
             self.load_legacy_type_rules()
 
         self._settings_updates_paused = False
+        self.refresh_recent_folders_combo()
         if not self.custom_type_rule_rows:
             self.apply_default_settings(save=False)
         else:
@@ -1144,6 +1234,7 @@ class FileSorterApp(QMainWindow):
         self.settings.setValue("date_format/pattern", self.get_selected_date_format())
         self.settings.setValue("type_sorting/enabled", self.enable_type_sorting_checkbox.isChecked())
         self.settings.setValue("type_rules/expanded", self.type_rules_expanded)
+        self.settings.setValue("folders/recent", json.dumps(self.recent_folders, ensure_ascii=True))
         custom_rules_payload = [
             {
                 "id": rule["id"],
