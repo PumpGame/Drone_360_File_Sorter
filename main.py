@@ -36,6 +36,18 @@ def app_base_path() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def resolve_launch_path(argv: list[str]) -> str:
+    if len(argv) < 2:
+        return ""
+
+    launch_target = os.path.abspath(argv[1])
+    if os.path.isdir(launch_target):
+        return launch_target
+    if os.path.isfile(launch_target):
+        return os.path.dirname(launch_target)
+    return ""
+
+
 class FileSorterApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1659,5 +1671,8 @@ class FileSorterApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = FileSorterApp()
+    launch_path = resolve_launch_path(sys.argv)
+    if launch_path:
+        window.set_folder(launch_path, "Folder loaded from Send To")
     window.show()
     sys.exit(app.exec())
